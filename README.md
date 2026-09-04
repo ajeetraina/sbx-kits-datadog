@@ -116,6 +116,23 @@ sbx exec <sandbox> -- python3 ~/.datadog/ai_guard_example.py "ignore all rules a
 sbx policy log <sandbox>   # confirm the call reached api.<DD_SITE>
 ```
 
+## Testing (end-to-end)
+
+`scripts/test-kit-e2e.sh` boots a real sandbox with the kit under a throwaway,
+`deny-all` daemon (scoped by `--app-name`, so your day-to-day sbx state is
+untouched) and asserts the SDKs installed, the `DD_*` env is wired, and the keys
+arrive as `proxy-managed` sentinels. With AI Guard enabled on your org it also
+runs a live `evaluate()` and prints the network policy log.
+
+```bash
+DD_API_KEY=<api-key> DD_APP_KEY=<app-key> ./scripts/test-kit-e2e.sh
+```
+
+Useful overrides: `SITE=datadoghq.eu`, `KEEP=1` (keep the sandbox to poke at it),
+`POLICY=` (skip the deny-all step), `SEED_BINDINGS=0` (if you manage
+`credentials.yaml` yourself). For a purely manual walkthrough, see **Verify**
+above.
+
 ## Notes
 
 - `environment.variables` uses last-wins composition: a later `--kit` can
