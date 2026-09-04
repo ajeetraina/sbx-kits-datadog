@@ -8,7 +8,7 @@ sandbox. It installs the AI Guard SDKs (Python `ddtrace` + Node `dd-trace`),
 sets the `DD_*` environment, and wires your Datadog API/APP keys through the
 sandbox proxy so AI apps and agents you build inside the sandbox can screen LLM
 prompts, tool calls, and outputs for **prompt injection, jailbreaks, tool
-misuse, and sensitive-data exfiltration** — all without the keys ever entering
+misuse, and sensitive-data exfiltration**, all without the keys ever entering
 the container.
 
 This pairs the sandbox's isolation + egress control with AI Guard's inline
@@ -19,7 +19,7 @@ LLM-interaction screening for defense in depth.
 - Installs `ddtrace>=3.19.0` (Python) and `dd-trace@^5.69.0` (Node, global).
 - Sets `DD_AI_GUARD_ENABLED=true`, `DD_SITE`, `DD_ENV`, `DD_SERVICE`; keeps
   AI Guard in agentless mode (no local Datadog Agent required).
-- Declares two proxy-injected credentials — `datadog-api` (→ `DD-API-KEY`) and
+- Declares two proxy-injected credentials: `datadog-api` (→ `DD-API-KEY`) and
   `datadog-app` (→ `DD-APPLICATION-KEY`). Inside the container both keys read as
   the sentinel `proxy-managed`; the proxy substitutes the real values on
   outbound calls to `api.<DD_SITE>`.
@@ -32,12 +32,12 @@ LLM-interaction screening for defense in depth.
 The mixin composes the sandbox's isolation + egress control with AI Guard's
 inline screening (diagram above):
 
-1. **Install time** — the SDKs (`ddtrace`, `dd-trace`) are pulled from PyPI/npm,
+1. **Install time**: the SDKs (`ddtrace`, `dd-trace`) are pulled from PyPI/npm,
    which the kit allowlists.
-2. **In the sandbox** — your AI app calls `client.evaluate(...)`. Inside the
+2. **In the sandbox**: your AI app calls `client.evaluate(...)`. Inside the
    container `DD_API_KEY` / `DD_APP_KEY` are the literal `proxy-managed`; the real
    keys are never present.
-3. **At the sbx proxy** — the outbound call to `api.<DD_SITE>` is checked against
+3. **At the sbx proxy**: the outbound call to `api.<DD_SITE>` is checked against
    the network allowlist, and the `proxy-managed` sentinel in the `DD-API-KEY` /
    `DD-APPLICATION-KEY` headers is swapped for the real host-side keys. Injection
    is keyed by `(domain, header)`, so the two keys never cross.
