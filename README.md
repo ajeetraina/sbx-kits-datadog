@@ -45,33 +45,41 @@ inline screening (diagram above):
    (ALLOW / DENY / ABORT); with `block=True` the SDK raises on a blocked
    interaction so your app can refuse or strip the offending turn.
 
-## Prerequisites: bind your Datadog keys
+## Prerequisites: store your Datadog keys
 
-The kit says *what* it needs; you say *where* your keys live. Add both services
-to `~/.config/sbx/credentials.yaml` (adjust `api.datadoghq.com` for your site):
-
-```yaml
-bindings:
-  datadog-api:
-    discovery:
-      - env: [DD_API_KEY]
-    allowedDomains:
-      - api.datadoghq.com
-  datadog-app:
-    discovery:
-      - env: [DD_APP_KEY]
-    allowedDomains:
-      - api.datadoghq.com
-```
-
-Or set them in the secret store:
+The kit says *what* it needs (the `datadog-api` / `datadog-app` services and where
+to inject them); you control *where the key comes from*. The recommended source is
+the **sbx secret store**, so the keys never sit in a shell env or a file on disk:
 
 ```bash
 sbx secret set datadog-api  <your-datadog-api-key>
 sbx secret set datadog-app  <your-datadog-application-key>
 ```
 
+Run with no value to be prompted interactively; add `-g` to apply to every
+sandbox. Confirm with `sbx secret ls`.
+
+On the **first** `sbx run` with the kit, sbx asks you to approve sending each
+credential to `api.<DD_SITE>` and records a binding in
+`~/.config/sbx/credentials.yaml`. Because the value already lives in the secret
+store, accept the defaults, no env var or file source is needed. The recorded
+binding uses an empty discovery list (the store is the source of truth):
+
+```yaml
+bindings:
+  datadog-api:
+    discovery: []                          # resolved from the sbx secret store
+    allowedDomains: [api.datadoghq.com]     # adjust for your DD_SITE
+  datadog-app:
+    discovery: []
+    allowedDomains: [api.datadoghq.com]
+```
+
 Get keys in Datadog under **Organization Settings → API Keys / Application Keys**.
+
+> Keys are stored encrypted in the sbx secret store and injected by the proxy at
+> request time. Don't put raw keys in `~/.config/sbx/credentials.yaml`, in
+> `environment.variables`, or in any file in the repo.
 
 ## Usage
 
@@ -124,8 +132,19 @@ untouched) and asserts the SDKs installed, the `DD_*` env is wired, and the keys
 arrive as `proxy-managed` sentinels. With AI Guard enabled on your org it also
 runs a live `evaluate()` and prints the network policy log.
 
+The script reads the keys from the sbx secret store only (never from plain-text
+args or env) and prompts, with hidden input, for any that aren't stored yet:
+
 ```bash
-DD_API_KEY=<api-key> DD_APP_KEY=<app-key> ./scripts/test-kit-e2e.sh
+./scripts/test-kit-e2e.sh
+```
+
+Or pre-store them once (hidden prompt) for a fully non-interactive run:
+
+```bash
+sbx --app-name sbx-kits-datadog-tck secret set datadog-api
+sbx --app-name sbx-kits-datadog-tck secret set datadog-app
+./scripts/test-kit-e2e.sh
 ```
 
 Useful overrides: `SITE=datadoghq.eu`, `KEEP=1` (keep the sandbox to poke at it),
