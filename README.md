@@ -1,4 +1,4 @@
-# datadog-ai-guard
+# sbx kit for Datadog AI Guard
 
 <img width="1200" alt="datadog-ai-guard architecture" src="docs/architecture.svg" />
 
