@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#632ca6"/>
+    </marker>
+    <marker id="arrowBack" markerWidth="12" markerHeight="12" refX="1" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M10,0 L0,5 L10,10 z" fill="#0a7f5b"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="12" markerHeight="12" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a8f99"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="660" fill="#ffffff"/>
+  <text x="600" y="42" text-anchor="middle" font-size="26" font-weight="700" fill="#1b1f24">datadog-ai-guard — Docker Sandboxes mixin</text>
+  <text x="600" y="68" text-anchor="middle" font-size="15" fill="#57606a">AI Guard screens LLM prompts, tool calls &amp; outputs — Datadog keys never enter the container</text>
+
+  <!-- ===================== HOST ===================== -->
+  <rect x="30" y="110" width="250" height="470" rx="14" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="155" y="140" text-anchor="middle" font-size="17" font-weight="700" fill="#1b1f24">Your Host</text>
+
+  <rect x="52" y="165" width="206" height="150" rx="10" fill="#ffffff" stroke="#c8ccd2" stroke-width="1.3"/>
+  <text x="155" y="190" text-anchor="middle" font-size="13" font-weight="700" fill="#632ca6">Secret store / bindings</text>
+  <text x="155" y="210" text-anchor="middle" font-size="12" fill="#57606a">~/.config/sbx/credentials.yaml</text>
+  <rect x="70" y="226" width="170" height="30" rx="6" fill="#f3eefb" stroke="#d7c7f0"/>
+  <text x="155" y="246" text-anchor="middle" font-size="12.5" font-weight="600" fill="#3f2a63">DD_API_KEY  (real)</text>
+  <rect x="70" y="264" width="170" height="30" rx="6" fill="#f3eefb" stroke="#d7c7f0"/>
+  <text x="155" y="284" text-anchor="middle" font-size="12.5" font-weight="600" fill="#3f2a63">DD_APP_KEY  (real)</text>
+
+  <rect x="52" y="335" width="206" height="120" rx="10" fill="#ffffff" stroke="#c8ccd2" stroke-width="1.3"/>
+  <text x="155" y="360" text-anchor="middle" font-size="13" font-weight="700" fill="#1b1f24">sbx CLI</text>
+  <text x="155" y="384" text-anchor="middle" font-size="12" fill="#57606a">sbx run &lt;agent&gt;</text>
+  <text x="155" y="404" text-anchor="middle" font-size="12" fill="#57606a">--kit datadog-ai-guard</text>
+  <text x="155" y="430" text-anchor="middle" font-size="11.5" fill="#8a8f99">bind: datadog-api,</text>
+  <text x="155" y="446" text-anchor="middle" font-size="11.5" fill="#8a8f99">datadog-app</text>
+
+  <!-- ===================== SANDBOX microVM ===================== -->
+  <rect x="330" y="110" width="470" height="470" rx="14" fill="#f6fbff" stroke="#8ec5ff" stroke-width="2"/>
+  <text x="565" y="140" text-anchor="middle" font-size="17" font-weight="700" fill="#0b4a8f">Docker Sandbox (microVM)</text>
+  <text x="565" y="160" text-anchor="middle" font-size="12.5" fill="#57606a">isolated · agent runs here</text>
+
+  <!-- agent -->
+  <rect x="356" y="178" width="418" height="60" rx="10" fill="#ffffff" stroke="#c8ccd2" stroke-width="1.3"/>
+  <text x="565" y="203" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1b1f24">Coding agent</text>
+  <text x="565" y="223" text-anchor="middle" font-size="12" fill="#57606a">claude · codex · gemini · … (any base agent)</text>
+
+  <!-- app + SDK -->
+  <rect x="356" y="252" width="418" height="150" rx="10" fill="#ffffff" stroke="#c8ccd2" stroke-width="1.3"/>
+  <text x="565" y="277" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1b1f24">Your AI app  +  AI Guard SDK</text>
+  <rect x="376" y="290" width="180" height="34" rx="6" fill="#eef7ff" stroke="#bcdcff"/>
+  <text x="466" y="312" text-anchor="middle" font-size="12" font-weight="600" fill="#0b4a8f">Python · ddtrace ≥ 3.19</text>
+  <rect x="576" y="290" width="180" height="34" rx="6" fill="#eef7ff" stroke="#bcdcff"/>
+  <text x="666" y="312" text-anchor="middle" font-size="12" font-weight="600" fill="#0b4a8f">Node · dd-trace ≥ 5.69</text>
+  <text x="565" y="348" text-anchor="middle" font-size="12.5" fill="#3f2a63">client.evaluate(messages, block=True)</text>
+  <text x="565" y="368" text-anchor="middle" font-size="11.5" fill="#8a8f99">called before acting on input / running a tool</text>
+  <text x="565" y="388" text-anchor="middle" font-size="11.5" fill="#8a8f99">→ ALLOW / DENY / ABORT</text>
+
+  <!-- env sentinels -->
+  <rect x="356" y="416" width="418" height="146" rx="10" fill="#fff8f0" stroke="#f0d9b8" stroke-width="1.3"/>
+  <text x="565" y="440" text-anchor="middle" font-size="13" font-weight="700" fill="#8a5a00">Container environment</text>
+  <rect x="374" y="452" width="182" height="30" rx="6" fill="#ffffff" stroke="#f0d9b8"/>
+  <text x="465" y="472" text-anchor="middle" font-size="11.5" font-weight="600" fill="#8a5a00">DD_API_KEY = proxy-managed</text>
+  <rect x="576" y="452" width="182" height="30" rx="6" fill="#ffffff" stroke="#f0d9b8"/>
+  <text x="667" y="472" text-anchor="middle" font-size="11.5" font-weight="600" fill="#8a5a00">DD_APP_KEY = proxy-managed</text>
+  <text x="565" y="503" text-anchor="middle" font-size="11.5" fill="#8a5a00">DD_AI_GUARD_ENABLED=true · DD_SITE · DD_ENV · DD_SERVICE</text>
+  <text x="565" y="523" text-anchor="middle" font-size="11" fill="#b06a00">agentless: DD_APM_TRACING_ENABLED=false</text>
+  <text x="565" y="541" text-anchor="middle" font-size="11" fill="#c0392b" font-weight="600">real keys are NEVER present in the container</text>
+
+  <!-- ===================== sbx PROXY band ===================== -->
+  <rect x="838" y="110" width="120" height="470" rx="14" fill="#f3eefb" stroke="#b794e0" stroke-width="2"/>
+  <text x="898" y="150" text-anchor="middle" font-size="15" font-weight="700" fill="#632ca6">sbx proxy</text>
+  <text x="898" y="196" text-anchor="middle" font-size="12" font-weight="700" fill="#3f2a63">sentinel</text>
+  <text x="898" y="212" text-anchor="middle" font-size="12" font-weight="700" fill="#3f2a63">swap</text>
+  <text x="898" y="236" text-anchor="middle" font-size="10.5" fill="#57606a">DD-API-KEY /</text>
+  <text x="898" y="250" text-anchor="middle" font-size="10.5" fill="#57606a">DD-APPLICATION-KEY</text>
+  <text x="898" y="264" text-anchor="middle" font-size="10.5" fill="#57606a">headers</text>
+  <line x1="858" y1="300" x2="938" y2="300" stroke="#d7c7f0"/>
+  <text x="898" y="330" text-anchor="middle" font-size="12" font-weight="700" fill="#3f2a63">network</text>
+  <text x="898" y="346" text-anchor="middle" font-size="12" font-weight="700" fill="#3f2a63">policy</text>
+  <text x="898" y="372" text-anchor="middle" font-size="10.5" fill="#57606a">egress allowlist:</text>
+  <text x="898" y="388" text-anchor="middle" font-size="10.5" fill="#57606a">api.&lt;DD_SITE&gt;</text>
+  <text x="898" y="404" text-anchor="middle" font-size="10.5" fill="#57606a">pypi / npm</text>
+
+  <!-- ===================== Datadog cloud ===================== -->
+  <rect x="990" y="150" width="190" height="230" rx="14" fill="#632ca6"/>
+  <text x="1085" y="182" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">Datadog</text>
+  <text x="1085" y="204" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">AI Guard</text>
+  <text x="1085" y="228" text-anchor="middle" font-size="11" fill="#e9dcff">api.&lt;DD_SITE&gt;</text>
+  <line x1="1010" y1="242" x2="1160" y2="242" stroke="#8a63c0"/>
+  <text x="1085" y="266" text-anchor="middle" font-size="11" fill="#ffffff">prompt injection</text>
+  <text x="1085" y="288" text-anchor="middle" font-size="11" fill="#ffffff">jailbreaks</text>
+  <text x="1085" y="310" text-anchor="middle" font-size="11" fill="#ffffff">tool misuse</text>
+  <text x="1085" y="332" text-anchor="middle" font-size="11" fill="#ffffff">data exfiltration</text>
+  <text x="1085" y="360" text-anchor="middle" font-size="10.5" fill="#e9dcff">PII &amp; secret detection</text>
+
+  <!-- package registries -->
+  <rect x="990" y="470" width="190" height="90" rx="12" fill="#ffffff" stroke="#d0d7de" stroke-width="1.3"/>
+  <text x="1085" y="497" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1b1f24">Package registries</text>
+  <text x="1085" y="519" text-anchor="middle" font-size="11" fill="#57606a">pypi.org · pythonhosted</text>
+  <text x="1085" y="537" text-anchor="middle" font-size="11" fill="#57606a">registry.npmjs.org</text>
+  <text x="1085" y="553" text-anchor="middle" font-size="10" fill="#8a8f99">SDK install (once)</text>
+
+  <!-- ===================== FLOWS ===================== -->
+  <!-- app -> proxy (outbound eval, with sentinel header) -->
+  <path d="M774 330 L836 330" fill="none" stroke="#632ca6" stroke-width="2.4" marker-end="url(#arrow)"/>
+  <text x="806" y="320" text-anchor="middle" font-size="10.5" fill="#632ca6">evaluate()</text>
+
+  <!-- proxy -> datadog -->
+  <path d="M960 300 C 975 290, 978 275, 988 265" fill="none" stroke="#632ca6" stroke-width="2.4" marker-end="url(#arrow)"/>
+  <text x="1000" y="300" text-anchor="middle" font-size="10" fill="#632ca6">real key</text>
+
+  <!-- datadog -> back (verdict) -->
+  <path d="M988 355 C 972 380, 968 400, 960 420" fill="none" stroke="#0a7f5b" stroke-width="2.2" marker-end="url(#arrowBack)"/>
+  <text x="1010" y="410" text-anchor="middle" font-size="10" fill="#0a7f5b">verdict</text>
+
+  <!-- host keys -> proxy (dashed, injected at proxy) -->
+  <path d="M258 240 C 520 90, 760 90, 896 156" fill="none" stroke="#8a8f99" stroke-width="1.8" stroke-dasharray="6 5" marker-end="url(#arrowGray)"/>
+  <text x="560" y="96" text-anchor="middle" font-size="11" fill="#8a8f99">host keys resolved &amp; injected at the proxy — not in the sandbox</text>
+
+  <!-- proxy -> registries (install) -->
+  <path d="M898 424 C 898 452, 940 500, 988 508" fill="none" stroke="#8a8f99" stroke-width="1.8" marker-end="url(#arrowGray)"/>
+</svg>

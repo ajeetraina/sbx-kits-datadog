@@ -1,0 +1,149 @@
+schemaVersion: "2"
+kind: mixin
+name: datadog-ai-guard
+displayName: Datadog AI Guard
+description: >-
+  Installs the Datadog AI Guard SDKs (Python ddtrace + Node dd-trace) and wires
+  agentless credentials/env so AI apps and agents built inside the sandbox can
+  screen LLM prompts, tool calls, and outputs for prompt injection, jailbreaks,
+  tool misuse, and sensitive-data exfiltration via client.evaluate(...).
+  Datadog API/APP keys are proxy-injected and never enter the container.
+  Sets DD_* environment variables (last-wins if a later --kit overrides them).
+licenses:
+  - Apache-2.0
+
+# Datadog site + tags are installer-tunable. Because substitution happens before
+# the spec is decoded, `site` also parameterizes the credential inject domain and
+# the network allowlist below, so non-US sites (datadoghq.eu, us3/us5/ap1) work
+# without editing the spec: the AI Guard intake is always api.<DD_SITE>.
+args:
+  site:
+    default: "datadoghq.com"
+    description: "Datadog site (DD_SITE): datadoghq.com | datadoghq.eu | us3.datadoghq.com | us5.datadoghq.com | ap1.datadoghq.com"
+    pattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
+  env:
+    default: "sandbox"
+    description: "Value for DD_ENV (deployment environment tag)."
+    pattern: '^[A-Za-z0-9._:/-]+$'
+  service:
+    default: "sbx-ai-guard"
+    description: "Value for DD_SERVICE (service name tag)."
+    pattern: '^[A-Za-z0-9._:/-]+$'
+
+# Two distinct secrets => two credential entries. Both are sentinel-swapped by the
+# proxy: the container only ever sees DD_API_KEY / DD_APP_KEY == "proxy-managed",
+# and the proxy substitutes the real values into the DD-API-KEY / DD-APPLICATION-KEY
+# request headers on outbound calls to api.<DD_SITE>. Injection is keyed by
+# (domain, header), so the two keys never get crossed even though they share a
+# sentinel and a domain.
+credentials:
+  - service: datadog-api
+    description: "Datadog API key (sent as the DD-API-KEY header)."
+    required: true
+    apiKey:
+      name: DD_API_KEY
+      inject:
+        - domain: "api.${{ kit.args.site }}"
+          header: DD-API-KEY
+          format: "%s"
+  - service: datadog-app
+    description: "Datadog application key (sent as the DD-APPLICATION-KEY header)."
+    required: true
+    apiKey:
+      name: DD_APP_KEY
+      inject:
+        - domain: "api.${{ kit.args.site }}"
+          header: DD-APPLICATION-KEY
+          format: "%s"
+
+permissions:
+  network:
+    allow:
+      # AI Guard evaluation intake (agentless). Must match the inject domain above.
+      - "api.${{ kit.args.site }}"
+      # Covers sibling single-label hosts on base sites (e.g. app.datadoghq.com).
+      - "*.${{ kit.args.site }}"
+      # pip metadata + wheel content hosts (needed for the ddtrace install).
+      - "pypi.org"
+      - "files.pythonhosted.org"
+      # npm registry (needed for the dd-trace install).
+      - "registry.npmjs.org"
+
+environment:
+  variables:
+    DD_AI_GUARD_ENABLED: "true"
+    DD_SITE: "${{ kit.args.site }}"
+    DD_ENV: "${{ kit.args.env }}"
+    DD_SERVICE: "${{ kit.args.service }}"
+    # No local Datadog Agent runs in the sandbox: keep AI Guard in agentless mode
+    # and avoid failed trace exports / extra egress. Flip these if you add an Agent.
+    DD_APM_TRACING_ENABLED: "false"
+    DD_INSTRUMENTATION_TELEMETRY_ENABLED: "false"
+
+setup:
+  install:
+    - command: "command -v python3 >/dev/null 2>&1 && (python3 -c 'import ddtrace' 2>/dev/null || python3 -m pip install --break-system-packages 'ddtrace>=3.19.0' || python3 -m pip install 'ddtrace>=3.19.0') || echo 'datadog-ai-guard: python3 not found, skipping ddtrace'"
+      description: Install the Datadog Python SDK (ddtrace) for AI Guard
+    - command: "command -v npm >/dev/null 2>&1 && (npm ls -g dd-trace >/dev/null 2>&1 || npm install -g 'dd-trace@^5.69.0') || echo 'datadog-ai-guard: npm not found, skipping dd-trace'"
+      description: Install the Datadog Node SDK (dd-trace) for AI Guard
+
+agentInstructions:
+  content: |
+    # Datadog AI Guard
+
+    This sandbox has the Datadog AI Guard SDKs pre-installed so any AI app or
+    agent you build here can screen LLM interactions in real time for **prompt
+    injection, jailbreaks, tool misuse, and sensitive-data exfiltration**.
+
+    Call `evaluate(...)` before you act on user input, before you run a tool the
+    model requested, and (optionally) on model output. Pass the full conversation
+    so far; AI Guard returns an action — typically ALLOW / DENY / ABORT — and with
+    `block=True/`{ block: true }` it raises when the interaction should be blocked.
+
+    ## Already configured
+
+    - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are set to the sentinel
+      `proxy-managed`. Do **not** try to read or print them — the sbx proxy swaps
+      in the real values on outbound calls to `api.$DD_SITE`. They never exist in
+      the container.
+    - **Environment**: `DD_AI_GUARD_ENABLED=true`, `DD_SITE`, `DD_ENV`,
+      `DD_SERVICE` are exported. APM tracing and instrumentation telemetry are
+      disabled by default (agentless mode, no local Datadog Agent).
+    - **Network**: egress is allowed to `api.$DD_SITE` (AI Guard intake) plus the
+      pip/npm registries.
+
+    ## Python (ddtrace >= 3.19.0)
+
+    ```python
+    from ddtrace.appsec.ai_guard import new_ai_guard_client, Message, Options
+
+    client = new_ai_guard_client()
+    result = client.evaluate(
+        messages=[
+            Message(role="system", content="You are an AI Assistant"),
+            Message(role="user", content=user_input),
+        ],
+        options=Options(block=True),  # raises if the interaction should be blocked
+    )
+    ```
+
+    ## Node.js (dd-trace >= 5.69.0)
+
+    dd-trace is installed globally. In your project either `npm install dd-trace`
+    (network is already allowed) or resolve the global copy, then:
+
+    ```javascript
+    import tracer from 'dd-trace';
+
+    const result = await tracer.aiguard.evaluate(
+      [
+        { role: 'system', content: 'You are an AI Assistant' },
+        { role: 'user', content: userInput },
+      ],
+      { block: true },
+    );
+    ```
+
+    Ready-to-run examples are in `~/.datadog/`. An operational runbook is in
+    `~/runbooks/datadog-ai-guard.md`. Full docs:
+    https://docs.datadoghq.com/security/ai_guard/
