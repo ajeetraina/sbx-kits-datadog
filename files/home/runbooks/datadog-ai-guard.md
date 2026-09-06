@@ -7,7 +7,7 @@ at <https://docs.datadoghq.com/security/ai_guard/>.
 
 | Concern | Value |
 |---|---|
-| Python SDK | `ddtrace>=3.19.0` (system) — `from ddtrace.appsec.ai_guard import new_ai_guard_client` |
+| Python SDK | `ddtrace>=3.19.0` (system) — `from ddtrace.aiguard import new_ai_guard_client` |
 | Node SDK | `dd-trace@^5.69.0` (global) — `tracer.aiguard.evaluate(...)` |
 | Enabled flag | `DD_AI_GUARD_ENABLED=true` |
 | Site | `DD_SITE` (default `datadoghq.com`) → intake `api.$DD_SITE` |

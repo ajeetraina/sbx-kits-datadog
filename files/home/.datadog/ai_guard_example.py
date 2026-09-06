@@ -9,7 +9,7 @@ Docs: https://docs.datadoghq.com/security/ai_guard/setup/sdk/
 """
 import sys
 
-from ddtrace.appsec.ai_guard import new_ai_guard_client, Message, Options
+from ddtrace.aiguard import new_ai_guard_client, Message, Options
 
 
 def main() -> int:

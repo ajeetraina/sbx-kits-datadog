@@ -115,7 +115,7 @@ agentInstructions:
     ## Python (ddtrace >= 3.19.0)
 
     ```python
-    from ddtrace.appsec.ai_guard import new_ai_guard_client, Message, Options
+    from ddtrace.aiguard import new_ai_guard_client, Message, Options
 
     client = new_ai_guard_client()
     result = client.evaluate(
