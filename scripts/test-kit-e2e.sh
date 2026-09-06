@@ -2,10 +2,12 @@
 #
 # End-to-end test for the datadog-ai-guard kit.
 #
-# Boots a real sbx sandbox with the kit under a throwaway, deny-all daemon and
-# verifies the kit actually landed inside the container: SDKs installed, DD_*
-# env wired, credentials delivered as proxy-managed sentinels, and (if your org
-# has AI Guard enabled) a live evaluate() call reaching api.<DD_SITE>.
+# Boots a real sbx sandbox with the kit under a throwaway, scoped daemon
+# (balanced policy) and verifies the kit actually landed inside the container:
+# SDKs installed, DD_* env wired, no real credential leaked into the container,
+# and (if your org has AI Guard enabled) a live evaluate() call reaching
+# api.<DD_SITE>. Note: on current sbx builds the declarative credential path does
+# not inject — wire keys with `sbx secret set-custom` (see docs/known-issues.md).
 #
 # Keys are NEVER passed as plain-text args or env vars. They live only in the
 # sbx secret store (encrypted); this script reads them from there and prompts
@@ -14,11 +16,11 @@
 #
 # Usage:
 #   ./scripts/test-kit-e2e.sh
-#     (prompts, hidden, for datadog-api / datadog-app if not already stored)
+#     (prompts, hidden, for datadogapi / datadogapp if not already stored)
 #
 #   # or pre-store them once (hidden prompt), then run non-interactively:
-#   sbx --app-name sbx-kits-datadog-tck secret set datadog-api
-#   sbx --app-name sbx-kits-datadog-tck secret set datadog-app
+#   sbx --app-name sbx-kits-datadog-tck secret set datadogapi
+#   sbx --app-name sbx-kits-datadog-tck secret set datadogapp
 #   ./scripts/test-kit-e2e.sh
 #
 # Environment (never keys):
@@ -79,8 +81,23 @@ say "2. Datadog keys in the scoped secret store (no plain text)"
 if [ -n "${DD_API_KEY:-}" ] || [ -n "${DD_APP_KEY:-}" ]; then
   info "note: DD_API_KEY/DD_APP_KEY found in env; this script ignores them and uses the secret store instead."
 fi
-for svc in datadog-api datadog-app; do
-  if "${SBX[@]}" secret ls 2>/dev/null | grep -qw "$svc"; then
+# Warm the scoped daemon: its first command after an idle/restart can return an
+# empty list while sandboxd spins up, which would spuriously fail the check below.
+for _ in 1 2 3 4 5; do "${SBX[@]}" secret ls >/dev/null 2>&1 && break; sleep 1; done
+secret_present() {  # capture first, then match on a here-string
+  # NB: `secret ls | grep -q` under `set -o pipefail` can fail even on a match —
+  # grep -q closes the pipe on first hit, SIGPIPEs secret ls, and pipefail
+  # propagates that. Grep a captured string instead, and retry for cold starts.
+  local out
+  for _ in 1 2 3; do
+    out="$("${SBX[@]}" secret ls 2>/dev/null || true)"
+    grep -qw "$1" <<<"$out" && return 0
+    sleep 1
+  done
+  return 1
+}
+for svc in datadogapi datadogapp; do
+  if secret_present "$svc"; then
     ok "$svc present in secret store"
   elif [ -t 0 ]; then
     info "$svc not stored — enter it now (input hidden):"
@@ -109,7 +126,7 @@ if os.path.exists(path):
         data = yaml.safe_load(f) or {}
     import shutil; shutil.copy(path, path + ".bak")
 b = data.setdefault("bindings", {})
-for svc in ("datadog-api", "datadog-app"):
+for svc in ("datadogapi", "datadogapp"):
     entry = b.setdefault(svc, {})
     entry.setdefault("discovery", [])            # store is the source of truth
     ad = entry.setdefault("allowedDomains", [])
@@ -119,13 +136,13 @@ with open(path, "w") as f:
     yaml.safe_dump(data, f, sort_keys=False)
 PY
   then
-    ok "bindings present for datadog-api / datadog-app -> $API_HOST (discovery: [])"
+    ok "bindings present for datadogapi / datadogapp -> $API_HOST (discovery: [])"
   else
     info "python3 + PyYAML unavailable — add these to $creds by hand, then re-run with SEED_BINDINGS=0:"
     cat <<EOF
   bindings:
-    datadog-api: { discovery: [], allowedDomains: [ $API_HOST ] }
-    datadog-app: { discovery: [], allowedDomains: [ $API_HOST ] }
+    datadogapi: { discovery: [], allowedDomains: [ $API_HOST ] }
+    datadogapp: { discovery: [], allowedDomains: [ $API_HOST ] }
 EOF
     exit 1
   fi
@@ -158,8 +175,17 @@ if v=$(ex python3 -c 'import ddtrace; print(ddtrace.__version__)' 2>/dev/null); 
 if ex npm ls -g dd-trace >/dev/null 2>&1; then ok "dd-trace installed globally"; else bad "dd-trace not installed"; fi
 [ "$(ex printenv DD_AI_GUARD_ENABLED 2>/dev/null)" = "true" ] && ok "DD_AI_GUARD_ENABLED=true" || bad "DD_AI_GUARD_ENABLED not true"
 [ "$(ex printenv DD_SITE 2>/dev/null)" = "$SITE" ] && ok "DD_SITE=$SITE" || bad "DD_SITE mismatch"
-[ "$(ex printenv DD_API_KEY 2>/dev/null)" = "proxy-managed" ] && ok "DD_API_KEY is proxy-managed sentinel" || bad "DD_API_KEY is not the sentinel (leak?)"
-[ "$(ex printenv DD_APP_KEY 2>/dev/null)" = "proxy-managed" ] && ok "DD_APP_KEY is proxy-managed sentinel" || bad "DD_APP_KEY is not the sentinel (leak?)"
+# The apiKey.name sentinel is NOT visible to `sbx exec` sessions even for a
+# working credential, and on current sbx builds the declarative credentials path
+# does not inject at all (see docs/known-issues.md #2). So treat these as
+# informational, not hard failures. A real credential value here would be a leak.
+for var in DD_API_KEY DD_APP_KEY; do
+  val="$(ex printenv "$var" 2>/dev/null || true)"
+  case "$val" in
+    ""|proxy-managed|sbx-cs-*) info "$var not exposed as a real value in exec (='${val:-unset}')" ;;
+    *) bad "$var looks like a real credential value in the container (leak?)" ;;
+  esac
+done
 
 # ---- 7. functional: live evaluate() (informational) ------------------------
 # Run via `sh -c` so $HOME expands inside the container (passing "$HOME" as an
