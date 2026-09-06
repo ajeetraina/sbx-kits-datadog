@@ -35,13 +35,12 @@ An obvious jailbreak string should be blocked; a benign prompt should be allowed
   to inspect the decision instead of raising.
 
 **Auth / 401 / 403 from `api.$DD_SITE`**
-: The proxy couldn't inject a key. On current sbx builds wire the keys with
-  `sbx secret set-custom --host api.$DD_SITE --env DD_API_KEY --value <key>` (and
-  `DD_APP_KEY`); the declarative `datadogapi` / `datadogapp` credentials don't
-  inject yet. A 401 specifically from `evaluate()` (with keys injecting) means the
-  Application key lacks the `ai_guard_evaluate` scope or AI Guard isn't enabled on
-  the org. See the kit README / docs/known-issues.md. Do not put real keys in the
-  container — they belong on the host.
+: The proxy couldn't inject a key. Confirm the host `~/.config/sbx/credentials.yaml`
+  binds **both** `datadogapi` and `datadogapp`, and that each binding's
+  `allowedDomains` lists `api.$DD_SITE` (the kit's inject domain). A 401 from
+  `evaluate()` also means the Application key needs the `ai_guard_evaluate` scope
+  and AI Guard must be enabled on the org. Do not put real keys in the container —
+  they belong on the host.
 
 **Request to Datadog is blocked by the network policy**
 : Run `sbx policy log <sandbox>` to see the blocked host. On a non-default

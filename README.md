@@ -22,9 +22,7 @@ LLM-interaction screening for defense in depth.
 - Declares two proxy-injected credentials: `datadogapi` (→ `DD-API-KEY`) and
   `datadogapp` (→ `DD-APPLICATION-KEY`). Inside the container both keys read as
   the sentinel `proxy-managed`; the proxy substitutes the real values on
-  outbound calls to `api.<DD_SITE>`. (See [Known issues](docs/known-issues.md):
-  on current sbx builds this declarative path does not inject yet — wire the keys
-  with `sbx secret set-custom`, below.)
+  outbound calls to `api.<DD_SITE>`.
 - Allows egress to `api.<DD_SITE>` (+ `*.<DD_SITE>`) and the pip/npm registries.
 - Ships runnable examples (`~/.datadog/`), a runbook (`~/runbooks/`), and agent
   instructions on calling `evaluate(...)`.
@@ -49,42 +47,23 @@ inline screening (diagram above):
 
 ## Prerequisites: store your Datadog keys
 
-You need a Datadog **API key** and an **Application key**. Get them in Datadog
-under **Organization Settings → API Keys / Application Keys** (these are *not* the
-newer "Access Tokens"). The Application key must carry the **`ai_guard_evaluate`**
-scope, and **AI Guard must be enabled** on your org, or `evaluate()` returns 401.
-
-### Wiring the keys (current sbx builds) — `set-custom`
-
-On current sbx builds the kit's declarative `credentials:` block does **not**
-inject (see [Known issues](docs/known-issues.md)). Until that lands upstream, wire
-the two keys with `sbx secret set-custom`, which is proven to work end-to-end (the
-proxy swaps a unique placeholder for the real key on outbound calls to
-`api.<DD_SITE>`; the real key never enters the container):
-
-```bash
-sbx secret set-custom --host api.datadoghq.com --env DD_API_KEY --value <your-datadog-api-key>
-sbx secret set-custom --host api.datadoghq.com --env DD_APP_KEY --value <your-datadog-application-key>
-```
-
-Adjust `--host` for a non-default `DD_SITE` (e.g. `api.datadoghq.eu`). Prefix each
-command with a space to keep the key out of shell history, or use `--ref` /
-`--command` to source it from 1Password / a secret manager. Confirm with
-`sbx secret ls` (the keys show under **CUSTOM SECRETS** with a generated
-placeholder). `set-custom` is global by default; scope with `--sandbox`.
-
-### Declarative path (once sbx injects kit credentials)
-
-The kit also declares the credentials the "proper" way — `datadogapi` (→
-`DD-API-KEY`) and `datadogapp` (→ `DD-APPLICATION-KEY`) — resolved from the
-**sbx secret store** so the keys never sit in a shell env or file on disk:
+The kit says *what* it needs (the `datadogapi` / `datadogapp` services and where
+to inject them); you control *where the key comes from*. The recommended source is
+the **sbx secret store**, so the keys never sit in a shell env or a file on disk:
 
 ```bash
 sbx secret set datadogapi  <your-datadog-api-key>
 sbx secret set datadogapp  <your-datadog-application-key>
 ```
 
-with an empty-discovery binding in `~/.config/sbx/credentials.yaml`:
+Run with no value to be prompted interactively; add `-g` to apply to every
+sandbox. Confirm with `sbx secret ls`.
+
+On the **first** `sbx run` with the kit, sbx asks you to approve sending each
+credential to `api.<DD_SITE>` and records a binding in
+`~/.config/sbx/credentials.yaml`. Because the value already lives in the secret
+store, accept the defaults, no env var or file source is needed. The recorded
+binding uses an empty discovery list (the store is the source of truth):
 
 ```yaml
 bindings:
@@ -96,8 +75,7 @@ bindings:
     allowedDomains: [api.datadoghq.com]
 ```
 
-This path is correct per the sbx spec but currently a no-op (Known issues #2);
-prefer `set-custom` above until it's fixed.
+Get keys in Datadog under **Organization Settings → API Keys / Application Keys**.
 
 > Keys are stored encrypted in the sbx secret store and injected by the proxy at
 > request time. Don't put raw keys in `~/.config/sbx/credentials.yaml`, in

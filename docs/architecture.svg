@@ -44,7 +44,7 @@
   <!-- Secret store -->
   <rect x="396" y="136" width="200" height="76" rx="9" fill="#ffffff" stroke="#cfd6df" stroke-width="1.5"/>
   <text x="496" y="168" text-anchor="middle" fill="#1f2937" font-size="16" font-weight="700">Secret store</text>
-  <text x="496" y="190" text-anchor="middle" fill="#6b7280" font-size="12">sbx secret set-custom DD_API_KEY</text>
+  <text x="496" y="190" text-anchor="middle" fill="#6b7280" font-size="12">sbx secret set datadogapi</text>
   <line x1="496" y1="212" x2="496" y2="248" stroke="#8a94a6" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- sbx proxy -->

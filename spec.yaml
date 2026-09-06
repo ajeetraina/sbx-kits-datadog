@@ -35,13 +35,8 @@ args:
 # and the proxy substitutes the real values into the DD-API-KEY / DD-APPLICATION-KEY
 # request headers on outbound calls to api.<DD_SITE>. Injection is keyed by
 # (domain, header), so the two keys never get crossed even though they share a
-# sentinel and a domain.
-#
-# NOTE: service names must NOT contain a hyphen. sbx derives an
-# SBX_CRED_<SERVICE>_MODE env var from the service name; a hyphen makes an
-# invalid env var name and the credential is dropped silently (no injection,
-# no error). See docs/known-issues.md. Hence datadogapi / datadogapp, not
-# datadog-api / datadog-app.
+# sentinel and a domain. Service names are kept hyphen-free (datadogapi /
+# datadogapp) so sbx can derive a valid SBX_CRED_<SERVICE>_MODE env var.
 credentials:
   - service: datadogapi
     description: "Datadog API key (sent as the DD-API-KEY header)."

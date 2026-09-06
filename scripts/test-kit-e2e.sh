@@ -6,8 +6,7 @@
 # (balanced policy) and verifies the kit actually landed inside the container:
 # SDKs installed, DD_* env wired, no real credential leaked into the container,
 # and (if your org has AI Guard enabled) a live evaluate() call reaching
-# api.<DD_SITE>. Note: on current sbx builds the declarative credential path does
-# not inject — wire keys with `sbx secret set-custom` (see docs/known-issues.md).
+# api.<DD_SITE>.
 #
 # Keys are NEVER passed as plain-text args or env vars. They live only in the
 # sbx secret store (encrypted); this script reads them from there and prompts
@@ -175,10 +174,9 @@ if v=$(ex python3 -c 'import ddtrace; print(ddtrace.__version__)' 2>/dev/null); 
 if ex npm ls -g dd-trace >/dev/null 2>&1; then ok "dd-trace installed globally"; else bad "dd-trace not installed"; fi
 [ "$(ex printenv DD_AI_GUARD_ENABLED 2>/dev/null)" = "true" ] && ok "DD_AI_GUARD_ENABLED=true" || bad "DD_AI_GUARD_ENABLED not true"
 [ "$(ex printenv DD_SITE 2>/dev/null)" = "$SITE" ] && ok "DD_SITE=$SITE" || bad "DD_SITE mismatch"
-# The apiKey.name sentinel is NOT visible to `sbx exec` sessions even for a
-# working credential, and on current sbx builds the declarative credentials path
-# does not inject at all (see docs/known-issues.md #2). So treat these as
-# informational, not hard failures. A real credential value here would be a leak.
+# The apiKey.name sentinel is not visible to `sbx exec` sessions even for a
+# working credential, so treat these as informational, not hard failures.
+# A real credential value here would be a leak.
 for var in DD_API_KEY DD_APP_KEY; do
   val="$(ex printenv "$var" 2>/dev/null || true)"
   case "$val" in
