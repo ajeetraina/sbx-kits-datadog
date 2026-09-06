@@ -1,0 +1,79 @@
+name: Publish kit
+
+# Publishes the datadog-ai-guard kit to Docker Hub as an OCI artifact.
+#
+# Requires two repository secrets:
+#   DOCKERHUB_USERNAME  (e.g. ajeetraina777)
+#   DOCKERHUB_TOKEN     (a Docker Hub access token with write access)
+#
+# Triggers:
+#   - manual run (workflow_dispatch), tag defaults to "latest"
+#   - pushing a git tag like v0.1.0 -> publishes "0.1.0" and "latest"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "OCI tag to publish"
+        required: false
+        default: "latest"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-kit-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOCKERHUB_USER: ajeetraina777
+  REPO: datadog-ai-guard-kit
+
+jobs:
+  publish:
+    # sbx ships as a macOS arm64 cask only, so publish from an Apple-silicon runner.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sbx CLI
+        run: |
+          brew install --cask docker/tap/sbx@rc
+          sbx version
+
+      - name: Authenticate to Docker Hub
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error::Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets." >&2
+            exit 1
+          fi
+          # sbx kit push falls back to the Docker credential store; write it directly
+          # so no Docker daemon/CLI is needed on the runner.
+          mkdir -p ~/.docker
+          auth=$(printf '%s:%s' "$DH_USER" "$DH_TOKEN" | base64)
+          printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}\n' "$auth" > ~/.docker/config.json
+
+      - name: Resolve tags
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            v="${GITHUB_REF_NAME#v}"      # strip leading v from vX.Y.Z
+            echo "tags=$v latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish OCI artifact(s)
+        run: |
+          chmod +x scripts/push-kit.sh
+          for t in ${{ steps.meta.outputs.tags }}; do
+            # DOCKERHUB_TOKEN is intentionally unset here: the script then skips
+            # `docker login` and uses the ~/.docker/config.json written above.
+            ./scripts/push-kit.sh "$t"
+          done
