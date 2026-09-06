@@ -89,7 +89,7 @@ agent affinity. Only the `--kit` value changes between the forms below.
 **Published OCI artifact** (available once merged to `main`):
 
 ```bash
-sbx run claude --kit docker.io/sbx/datadog-ai-guard-kit:latest .
+sbx run claude --kit docker.io/ajeetraina777/datadog-ai-guard-kit:latest .
 ```
 
 **Git URL** (pin to a commit SHA):
