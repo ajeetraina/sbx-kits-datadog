@@ -14,6 +14,8 @@
 #   REPO             repository name             (default: datadog-ai-guard-kit)
 #   TAG              image tag                   (default: latest, or $1)
 #   DOCKERHUB_TOKEN  Docker Hub access token / PAT (never echoed)
+#   SIGN             set to 1 to Sigstore-sign the push (keyless; uses the
+#                    ambient OIDC provider in CI, or an interactive browser login)
 
 set -euo pipefail
 
@@ -37,8 +39,13 @@ else
   echo "== no DOCKERHUB_TOKEN set — relying on existing docker/sbx session =="
 fi
 
-echo "== push $REF =="
-sbx kit push "$KIT_DIR" "$REF"
+PUSH_ARGS=()
+[ "${SIGN:-0}" = "1" ] && PUSH_ARGS+=(--sign)
+
+# The ${arr[@]+"${arr[@]}"} form expands to nothing (not an error) for an empty
+# array under `set -u`, including on macOS's bash 3.2.
+echo "== push $REF ${PUSH_ARGS[*]:-} =="
+sbx kit push "$KIT_DIR" "$REF" ${PUSH_ARGS[@]+"${PUSH_ARGS[@]}"}
 
 echo
 echo "Pushed OCI artifact: $REF"

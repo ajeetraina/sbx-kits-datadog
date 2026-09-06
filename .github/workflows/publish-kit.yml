@@ -8,6 +8,7 @@ name: Publish kit
 #
 # Triggers:
 #   - manual run (workflow_dispatch), tag defaults to "latest"
+#   - push to main -> republishes "latest"
 #   - pushing a git tag like v0.1.0 -> publishes "0.1.0" and "latest"
 
 on:
@@ -18,11 +19,14 @@ on:
         required: false
         default: "latest"
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 permissions:
   contents: read
+  id-token: write   # keyless Sigstore signing (OIDC) for `sbx kit push --sign`
 
 concurrency:
   group: publish-kit-${{ github.ref }}
@@ -62,14 +66,18 @@ jobs:
       - name: Resolve tags
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            v="${GITHUB_REF_NAME#v}"      # strip leading v from vX.Y.Z
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"                       # strip leading v from vX.Y.Z
             echo "tags=$v latest" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tags=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=latest" >> "$GITHUB_OUTPUT"          # push to main
           fi
 
       - name: Publish OCI artifact(s)
+        env:
+          SIGN: "1"   # keyless Sigstore signature attached as an OCI referrer
         run: |
           chmod +x scripts/push-kit.sh
           for t in ${{ steps.meta.outputs.tags }}; do
