@@ -85,3 +85,11 @@ jobs:
             # `docker login` and uses the ~/.docker/config.json written above.
             ./scripts/push-kit.sh "$t"
           done
+
+      - name: Sync Docker Hub overview
+        env:
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          chmod +x scripts/update-dockerhub-readme.sh
+          ./scripts/update-dockerhub-readme.sh docs/DOCKERHUB.md
