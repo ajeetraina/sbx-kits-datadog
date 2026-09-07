@@ -13,9 +13,12 @@ licenses:
   - Apache-2.0
 
 # Datadog site + tags are installer-tunable. Because substitution happens before
-# the spec is decoded, `site` also parameterizes the credential inject domain and
+# the spec is decoded, `site` also parameterizes the credential inject domains and
 # the network allowlist below, so non-US sites (datadoghq.eu, us3/us5/ap1) work
-# without editing the spec: the AI Guard intake is always api.<DD_SITE>.
+# without editing the spec. The AI Guard SDK derives its endpoint host from the
+# site: app.<site> for the base sites (datadoghq.com, datadoghq.eu) and the bare
+# <site> for regional sites (us3/us5/ap1.datadoghq.com) — never api.<site>. The
+# credential inject + allowlist below cover both shapes.
 args:
   site:
     default: "datadoghq.com"
@@ -33,9 +36,12 @@ args:
 # Two distinct secrets => two credential entries. Both are sentinel-swapped by the
 # proxy: the container only ever sees DD_API_KEY / DD_APP_KEY == "proxy-managed",
 # and the proxy substitutes the real values into the DD-API-KEY / DD-APPLICATION-KEY
-# request headers on outbound calls to api.<DD_SITE>. Injection is keyed by
-# (domain, header), so the two keys never get crossed even though they share a
-# sentinel and a domain. Service names are kept hyphen-free (datadogapi /
+# request headers on outbound calls to the AI Guard endpoint. The SDK's endpoint
+# host depends on the site (app.<site> for base sites; the bare <site> for
+# us3/us5/ap1), so each key injects on BOTH candidate hosts — whichever the SDK
+# actually calls gets the swap, the other rule is simply unused. Injection is keyed
+# by (domain, header), so the two keys never get crossed even though they share a
+# sentinel and their domains. Service names are kept hyphen-free (datadogapi /
 # datadogapp) so sbx can derive a valid SBX_CRED_<SERVICE>_MODE env var.
 credentials:
   - service: datadogapi
@@ -44,7 +50,10 @@ credentials:
     apiKey:
       name: DD_API_KEY
       inject:
-        - domain: "api.${{ kit.args.site }}"
+        - domain: "app.${{ kit.args.site }}"
+          header: DD-API-KEY
+          format: "%s"
+        - domain: "${{ kit.args.site }}"
           header: DD-API-KEY
           format: "%s"
   - service: datadogapp
@@ -53,16 +62,22 @@ credentials:
     apiKey:
       name: DD_APP_KEY
       inject:
-        - domain: "api.${{ kit.args.site }}"
+        - domain: "app.${{ kit.args.site }}"
+          header: DD-APPLICATION-KEY
+          format: "%s"
+        - domain: "${{ kit.args.site }}"
           header: DD-APPLICATION-KEY
           format: "%s"
 
 permissions:
   network:
     allow:
-      # AI Guard evaluation intake (agentless). Must match the inject domain above.
-      - "api.${{ kit.args.site }}"
-      # Covers sibling single-label hosts on base sites (e.g. app.datadoghq.com).
+      # AI Guard evaluation intake (agentless). The SDK targets app.<site> on the
+      # base sites (datadoghq.com, datadoghq.eu) and the bare <site> on regional
+      # sites (us3/us5/ap1). Cover both; must match the inject domains above.
+      - "app.${{ kit.args.site }}"
+      - "${{ kit.args.site }}"
+      # Sibling hosts on the same site.
       - "*.${{ kit.args.site }}"
       # pip metadata + wheel content hosts (needed for the ddtrace install).
       - "pypi.org"
@@ -105,13 +120,14 @@ agentInstructions:
 
     - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are set to the sentinel
       `proxy-managed`. Do **not** try to read or print them — the sbx proxy swaps
-      in the real values on outbound calls to `api.$DD_SITE`. They never exist in
-      the container.
+      in the real values on outbound calls to the AI Guard endpoint (`app.$DD_SITE`
+      on base sites, the bare `$DD_SITE` on us3/us5/ap1). They never exist in the
+      container.
     - **Environment**: `DD_AI_GUARD_ENABLED=true`, `DD_SITE`, `DD_ENV`,
       `DD_SERVICE` are exported. APM tracing and instrumentation telemetry are
       disabled by default (agentless mode, no local Datadog Agent).
-    - **Network**: egress is allowed to `api.$DD_SITE` (AI Guard intake) plus the
-      pip/npm registries.
+    - **Network**: egress is allowed to the AI Guard endpoint (`app.$DD_SITE` /
+      `$DD_SITE`) plus the pip/npm registries.
 
     ## Python (ddtrace >= 3.19.0)
 
