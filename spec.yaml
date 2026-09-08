@@ -100,6 +100,41 @@ setup:
   install:
     - command: "command -v python3 >/dev/null 2>&1 && (python3 -c 'import ddtrace' 2>/dev/null || python3 -m pip install --break-system-packages 'ddtrace>=3.19.0' || python3 -m pip install 'ddtrace>=3.19.0') || echo 'datadog-ai-guard: python3 not found, skipping ddtrace'"
       description: Install the Datadog Python SDK (ddtrace) for AI Guard
+    # ddtrace's AI Guard client (ddtrace.internal.utils.http.get_connection) opens a
+    # *direct* HTTPSConnection and ignores HTTPS_PROXY, so the sbx credential-injecting
+    # forward proxy never sees the request and the DD-API-KEY placeholder reaches Datadog
+    # unswapped -> HTTP 401. Install a stdlib shim (shipped at ~/.datadog/_sbx_proxy_tunnel.py)
+    # into site-packages via a .pth auto-import so http.client.HTTPSConnection tunnels
+    # through HTTPS_PROXY. No-op when no proxy is set; honors NO_PROXY.
+    - command: |
+        command -v python3 >/dev/null 2>&1 && python3 -c '
+        import glob, os, sysconfig, site, shutil
+        cands = glob.glob("/home/*/.datadog/_sbx_proxy_tunnel.py") + ["/root/.datadog/_sbx_proxy_tunnel.py"]
+        src = next((c for c in cands if os.path.isfile(c)), None)
+        if not src:
+            print("datadog-ai-guard: proxy shim source not found; SDK calls may 401"); raise SystemExit(0)
+        dirs = set()
+        try:
+            dirs.update(p for p in site.getsitepackages() if p)
+        except Exception:
+            pass
+        for k in ("purelib", "platlib"):
+            p = sysconfig.get_paths().get(k)
+            if p:
+                dirs.add(p)
+        done = []
+        for d in dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+                shutil.copyfile(src, os.path.join(d, "_sbx_proxy_tunnel.py"))
+                with open(os.path.join(d, "aaa_sbx_proxy_tunnel.pth"), "w") as f:
+                    f.write("import _sbx_proxy_tunnel\n")
+                done.append(d)
+            except Exception:
+                pass
+        print("datadog-ai-guard: proxy tunnel shim installed ->", done or "(no writable site dir)")
+        ' || echo "datadog-ai-guard: python3 not found, skipping proxy shim"
+      description: Route Python stdlib HTTPS through the sbx proxy so the AI Guard SDK works
     - command: "command -v npm >/dev/null 2>&1 && (npm ls -g dd-trace >/dev/null 2>&1 || npm install -g 'dd-trace@^5.69.0') || echo 'datadog-ai-guard: npm not found, skipping dd-trace'"
       description: Install the Datadog Node SDK (dd-trace) for AI Guard
 
@@ -118,11 +153,15 @@ agentInstructions:
 
     ## Already configured
 
-    - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are set to the sentinel
-      `proxy-managed`. Do **not** try to read or print them — the sbx proxy swaps
-      in the real values on outbound calls to the AI Guard endpoint (`app.$DD_SITE`
-      on base sites, the bare `$DD_SITE` on us3/us5/ap1). They never exist in the
-      container.
+    - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are a proxy-managed placeholder,
+      never the real value. Do **not** try to read or print them — the sbx proxy
+      swaps in the real values on outbound calls to the AI Guard endpoint
+      (`app.$DD_SITE` on base sites, the bare `$DD_SITE` on us3/us5/ap1). They never
+      exist in the container.
+    - **Proxy routing**: outbound HTTPS must go through the sbx proxy for the swap
+      to happen. Python is handled automatically (a `.pth` auto-imports the
+      `_sbx_proxy_tunnel` shim). **Node**: `import '~/.datadog/sbx_proxy_tunnel.mjs'`
+      **before** dd-trace makes any call, otherwise it bypasses the proxy and 401s.
     - **Environment**: `DD_AI_GUARD_ENABLED=true`, `DD_SITE`, `DD_ENV`,
       `DD_SERVICE` are exported. APM tracing and instrumentation telemetry are
       disabled by default (agentless mode, no local Datadog Agent).
@@ -147,9 +186,11 @@ agentInstructions:
     ## Node.js (dd-trace >= 5.69.0)
 
     dd-trace is installed globally. In your project either `npm install dd-trace`
-    (network is already allowed) or resolve the global copy, then:
+    (network is already allowed) or resolve the global copy. Import the proxy
+    helper first so dd-trace's HTTPS is routed through the injecting proxy:
 
     ```javascript
+    import '~/.datadog/sbx_proxy_tunnel.mjs';  // MUST be first; else 401
     import tracer from 'dd-trace';
 
     const result = await tracer.aiguard.evaluate(
