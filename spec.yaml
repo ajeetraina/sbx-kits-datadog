@@ -97,18 +97,25 @@ permissions:
       # sites (us3/us5/ap1). Cover both; must match the inject domains above.
       - "app.${{ kit.args.site }}"
       - "${{ kit.args.site }}"
-      # Sibling hosts on the same site.
+      # Sibling hosts on the same site. NOTE: "*." matches a SINGLE label, so it
+      # covers app./api.<site> but NOT the two-label trace.agent.<site> — that host
+      # is listed explicitly below for the apm=true trace path.
       - "*.${{ kit.args.site }}"
       # pip metadata + wheel content hosts (needed for the ddtrace install).
       - "pypi.org"
       - "files.pythonhosted.org"
       # npm registry (needed for the dd-trace install).
       - "registry.npmjs.org"
-      # apm=true only: pull the Datadog Agent container image (gcr.io manifest +
-      # storage.googleapis.com layers). Unused when apm=false. The Agent's trace
-      # intake (trace.agent.<site>, api.<site>) is already covered by *.<site>.
-      - "gcr.io"
-      - "storage.googleapis.com"
+      # apm=true only: the in-sandbox Agent posts APM traces here. Two labels
+      # (trace.agent), so *.<site> above does NOT cover it — allow it explicitly.
+      # (Under org-managed governance the org's own policy is authoritative for
+      # <site> and must include this host; a kit/local allow can't override it.)
+      - "trace.agent.${{ kit.args.site }}"
+      # apm=true only: pull the Datadog Agent image from Docker Hub. Unused when
+      # apm=false.
+      - "registry-1.docker.io"
+      - "auth.docker.io"
+      - "production.cloudflare.docker.com"
 
 environment:
   variables:

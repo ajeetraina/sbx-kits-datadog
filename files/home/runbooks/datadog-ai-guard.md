@@ -69,13 +69,25 @@ egress to Docker Hub for the `datadog/agent:7` image, and the `DD_API_KEY`
 placeholder registered for injection on `trace.agent.$DD_SITE` and `api.$DD_SITE`
 (the kit's declarative credentials cover these).
 
-**Agent trace intake returns 403 / "rejected by edge"**
-: The Agent reached the intake but the `DD_API_KEY` placeholder was not swapped for
-  the real key there. The key must be injected on `trace.agent.$DD_SITE` (and
-  `api.$DD_SITE`), not just the evaluate host `app.$DD_SITE`. If you provisioned
-  the key as a **custom secret**, bind it to all of them — one entry with a
-  wildcard host covers them: `sbx secret set-custom --host '**.$DD_SITE'
-  --env DD_API_KEY --value <key>`.
+**Agent trace intake returns 403** — first read the response body; there are two
+very different causes:
+
+: **`Blocked by network policy: domain trace.agent.$DD_SITE`** — egress to the
+  trace intake isn't allowed. `trace.agent.$DD_SITE` has two labels, so a
+  `*.$DD_SITE` rule does NOT cover it; the kit allows it explicitly. **But if the
+  daemon is org-managed** (`sbx policy ls` → `Managed by <org>`), the org's policy
+  is authoritative for `$DD_SITE` and a kit/local allow can't override it —
+  `policy allow network` fails with *"managed by your organization; local allow
+  rules are not applied."* An org admin must add `trace.agent.$DD_SITE` to the
+  org's Datadog allow rule. (The evaluate path still works because `app.$DD_SITE`
+  is single-label and already allowed.)
+
+: **A Datadog auth 403 / "rejected by edge"** — reached the intake but the
+  `DD_API_KEY` placeholder was not swapped there. The key must be injected on
+  `trace.agent.$DD_SITE` (and `api.$DD_SITE`), not just `app.$DD_SITE`. With a
+  **custom secret**, one wildcard entry covers all three: `sbx secret set-custom
+  --host '**.$DD_SITE' --env DD_API_KEY --value <key>` (remove the old
+  single-host entry first: `sbx secret rm --placeholder <its-placeholder> -f`).
 
 **Agent logs `x509: certificate signed by unknown authority`**
 : The Agent container doesn't trust the sbx proxy's MITM CA. `start-agent.sh`
