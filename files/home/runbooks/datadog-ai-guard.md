@@ -12,7 +12,7 @@ at <https://docs.datadoghq.com/security/ai_guard/>.
 | Enabled flag | `DD_AI_GUARD_ENABLED=true` |
 | Site | `DD_SITE` (default `datadoghq.com`) → endpoint `app.$DD_SITE` (base sites) / bare `$DD_SITE` (us3/us5/ap1) |
 | Tags | `DD_ENV`, `DD_SERVICE` |
-| Mode | Agentless: `DD_APM_TRACING_ENABLED=false`, `DD_INSTRUMENTATION_TELEMETRY_ENABLED=false` |
+| Mode | Agentless by default (`DD_APM_TRACING_ENABLED=false`). `--kit-arg apm=true` runs an in-sandbox Agent so evaluations show in the trace UI (see below). |
 | Keys | `DD_API_KEY` / `DD_APP_KEY` = a proxy placeholder (real values injected by the proxy) |
 | Proxy shim | `_sbx_proxy_tunnel` (Python, auto) + `~/.datadog/sbx_proxy_tunnel.mjs` (Node, import it) |
 
@@ -41,6 +41,52 @@ reaches Datadog unswapped → **HTTP 401**. The kit fixes this:
 - **Node**: `import '~/.datadog/sbx_proxy_tunnel.mjs'` **before** dd-trace makes a
   call (it swaps in a CONNECT-tunnelling `https.globalAgent`). In your own app,
   add that import first, then `npm install dd-trace` and use it normally.
+
+## Seeing evaluations in the AI Guard trace UI (`apm=true`)
+
+`evaluate()` has two independent paths: (1) the **evaluator API** call returns the
+ALLOW/DENY verdict synchronously — this is all the default (agentless) kit needs
+for inline enforcement; (2) an **APM span** describing the evaluation, which the
+tracer flushes to a Datadog Agent on `localhost:8126`. Path 2 is what populates
+the Datadog UI ("AI Guard → Submit your first trace"). With no Agent that span is
+dropped, so the UI stays on *Waiting for traces* even though every `evaluate()`
+succeeds. **Nothing is broken** — the kit is built for enforcement, not the UI.
+
+To get UI visibility, launch the kit with `--kit-arg apm=true`. That sets
+`DD_APM_TRACING_ENABLED=true` and runs a Datadog Agent container that forwards
+trace intake through the sbx proxy (so the real key is swapped in and never enters
+the sandbox). Start/re-start it from a shell any time (idempotent):
+
+```bash
+sh ~/.datadog/start-agent.sh
+# check delivery (look for "Traces received" and no 403s):
+docker exec dd-agent agent status | sed -n '/APM/,/^$/p'
+docker exec dd-agent tail -f /var/log/datadog/trace-agent.log
+```
+
+Requirements: docker available in the sandbox (the `shell-docker` template has it),
+egress to Docker Hub for the `datadog/agent:7` image, and the `DD_API_KEY`
+placeholder registered for injection on `trace.agent.$DD_SITE` and `api.$DD_SITE`
+(the kit's declarative credentials cover these).
+
+**Agent trace intake returns 403 / "rejected by edge"**
+: The Agent reached the intake but the `DD_API_KEY` placeholder was not swapped for
+  the real key there. The key must be injected on `trace.agent.$DD_SITE` (and
+  `api.$DD_SITE`), not just the evaluate host `app.$DD_SITE`. If you provisioned
+  the key as a **custom secret**, bind it to all of them — one entry with a
+  wildcard host covers them: `sbx secret set-custom --host '**.$DD_SITE'
+  --env DD_API_KEY --value <key>`.
+
+**Agent logs `x509: certificate signed by unknown authority`**
+: The Agent container doesn't trust the sbx proxy's MITM CA. `start-agent.sh`
+  mounts the microVM CA bundle (`/etc/ssl/certs/ca-certificates.crt`) and sets
+  `SSL_CERT_FILE`; ensure that bundle exists and includes the "Docker Sandboxes
+  Proxy CA".
+
+**Agent logs `proxyconnect ... connection refused`**
+: The Agent can't reach the sbx proxy. It must run with `--network host` so it
+  shares the microVM netns where `gateway.docker.internal:3128` resolves (a
+  bridged container's `host-gateway` IP is not where the proxy listens).
 
 ## Triage
 
