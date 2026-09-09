@@ -32,6 +32,16 @@ args:
     default: "sbx-ai-guard"
     description: "Value for DD_SERVICE (service name tag)."
     pattern: '^[A-Za-z0-9._:/-]+$'
+  apm:
+    default: "false"
+    description: >-
+      Send AI Guard evaluations as APM traces so they appear in the Datadog UI
+      ("AI Guard / Submit your first trace"). "true" runs a Datadog Agent
+      container in the sandbox (trace intake on 127.0.0.1:8126) that forwards
+      through the credential-injecting proxy. Default "false" keeps the kit fully
+      agentless — evaluate() still returns live verdicts for inline enforcement,
+      they just won't show in the trace UI.
+    pattern: '^(true|false)$'
 
 # Two distinct secrets => two credential entries. Both are sentinel-swapped by the
 # proxy: the container only ever sees DD_API_KEY / DD_APP_KEY == "proxy-managed",
@@ -56,6 +66,16 @@ credentials:
         - domain: "${{ kit.args.site }}"
           header: DD-API-KEY
           format: "%s"
+        # apm=true only: the in-sandbox Datadog Agent forwards APM traces to the
+        # trace intake with a DD-Api-Key header, and validates the key against
+        # api.<site> with DD-API-KEY. Inject on both so the Agent's egress gets
+        # the real key swapped in (unused when apm=false).
+        - domain: "trace.agent.${{ kit.args.site }}"
+          header: DD-Api-Key
+          format: "%s"
+        - domain: "api.${{ kit.args.site }}"
+          header: DD-API-KEY
+          format: "%s"
   - service: datadogapp
     description: "Datadog application key (sent as the DD-APPLICATION-KEY header)."
     required: true
@@ -77,13 +97,25 @@ permissions:
       # sites (us3/us5/ap1). Cover both; must match the inject domains above.
       - "app.${{ kit.args.site }}"
       - "${{ kit.args.site }}"
-      # Sibling hosts on the same site.
+      # Sibling hosts on the same site. NOTE: "*." matches a SINGLE label, so it
+      # covers app./api.<site> but NOT the two-label trace.agent.<site> — that host
+      # is listed explicitly below for the apm=true trace path.
       - "*.${{ kit.args.site }}"
       # pip metadata + wheel content hosts (needed for the ddtrace install).
       - "pypi.org"
       - "files.pythonhosted.org"
       # npm registry (needed for the dd-trace install).
       - "registry.npmjs.org"
+      # apm=true only: the in-sandbox Agent posts APM traces here. Two labels
+      # (trace.agent), so *.<site> above does NOT cover it — allow it explicitly.
+      # (Under org-managed governance the org's own policy is authoritative for
+      # <site> and must include this host; a kit/local allow can't override it.)
+      - "trace.agent.${{ kit.args.site }}"
+      # apm=true only: pull the Datadog Agent image from Docker Hub. Unused when
+      # apm=false.
+      - "registry-1.docker.io"
+      - "auth.docker.io"
+      - "production.cloudflare.docker.com"
 
 environment:
   variables:
@@ -91,17 +123,82 @@ environment:
     DD_SITE: "${{ kit.args.site }}"
     DD_ENV: "${{ kit.args.env }}"
     DD_SERVICE: "${{ kit.args.service }}"
-    # No local Datadog Agent runs in the sandbox: keep AI Guard in agentless mode
-    # and avoid failed trace exports / extra egress. Flip these if you add an Agent.
-    DD_APM_TRACING_ENABLED: "false"
+    # APM tracing is what delivers AI Guard evaluations to the trace UI. It is
+    # gated on the `apm` arg: "false" (default) keeps the kit fully agentless (no
+    # Agent, no trace export, no extra egress); "true" turns on tracing and the
+    # setup below starts an in-sandbox Agent to forward the spans.
+    DD_APM_TRACING_ENABLED: "${{ kit.args.apm }}"
     DD_INSTRUMENTATION_TELEMETRY_ENABLED: "false"
 
 setup:
   install:
     - command: "command -v python3 >/dev/null 2>&1 && (python3 -c 'import ddtrace' 2>/dev/null || python3 -m pip install --break-system-packages 'ddtrace>=3.19.0' || python3 -m pip install 'ddtrace>=3.19.0') || echo 'datadog-ai-guard: python3 not found, skipping ddtrace'"
       description: Install the Datadog Python SDK (ddtrace) for AI Guard
+    # ddtrace's AI Guard client (ddtrace.internal.utils.http.get_connection) opens a
+    # *direct* HTTPSConnection and ignores HTTPS_PROXY, so the sbx credential-injecting
+    # forward proxy never sees the request and the DD-API-KEY placeholder reaches Datadog
+    # unswapped -> HTTP 401. Install a stdlib shim (shipped at ~/.datadog/_sbx_proxy_tunnel.py)
+    # into site-packages via a .pth auto-import so http.client.HTTPSConnection tunnels
+    # through HTTPS_PROXY. No-op when no proxy is set; honors NO_PROXY.
+    - command: |
+        command -v python3 >/dev/null 2>&1 && python3 -c '
+        import glob, os, sysconfig, site, shutil
+        cands = glob.glob("/home/*/.datadog/_sbx_proxy_tunnel.py") + ["/root/.datadog/_sbx_proxy_tunnel.py"]
+        src = next((c for c in cands if os.path.isfile(c)), None)
+        if not src:
+            print("datadog-ai-guard: proxy shim source not found; SDK calls may 401"); raise SystemExit(0)
+        dirs = set()
+        try:
+            dirs.update(p for p in site.getsitepackages() if p)
+        except Exception:
+            pass
+        for k in ("purelib", "platlib"):
+            p = sysconfig.get_paths().get(k)
+            if p:
+                dirs.add(p)
+        done = []
+        for d in dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+                shutil.copyfile(src, os.path.join(d, "_sbx_proxy_tunnel.py"))
+                with open(os.path.join(d, "aaa_sbx_proxy_tunnel.pth"), "w") as f:
+                    f.write("import _sbx_proxy_tunnel\n")
+                done.append(d)
+            except Exception:
+                pass
+        print("datadog-ai-guard: proxy tunnel shim installed ->", done or "(no writable site dir)")
+        ' || echo "datadog-ai-guard: python3 not found, skipping proxy shim"
+      description: Route Python stdlib HTTPS through the sbx proxy so the AI Guard SDK works
     - command: "command -v npm >/dev/null 2>&1 && (npm ls -g dd-trace >/dev/null 2>&1 || npm install -g 'dd-trace@^5.69.0') || echo 'datadog-ai-guard: npm not found, skipping dd-trace'"
       description: Install the Datadog Node SDK (dd-trace) for AI Guard
+    # apm=true only: run an in-sandbox Datadog Agent so AI Guard evaluations reach
+    # the trace UI. The Agent forwards through the sbx proxy (real key swapped in;
+    # never enters the sandbox). start-agent.sh is idempotent and reads the runtime
+    # env (DD_API_KEY placeholder, HTTPS_PROXY, DD_APM_TRACING_ENABLED); re-run it
+    # from a shell any time. No-op when apm=false.
+    - command: |
+        if [ "${{ kit.args.apm }}" != "true" ]; then
+          echo "datadog-ai-guard: apm=false (agentless) — skipping Datadog Agent; evaluate() still returns live verdicts."
+        elif ! command -v docker >/dev/null 2>&1; then
+          echo "datadog-ai-guard: apm=true but docker is unavailable — cannot run the trace Agent."
+        else
+          s="$(ls /home/*/.datadog/start-agent.sh /root/.datadog/start-agent.sh 2>/dev/null | head -1)"
+          [ -n "$s" ] && chmod +x "$s" 2>/dev/null || true
+          # Warm the image so the first runtime start is fast; non-fatal if it fails.
+          docker pull "${DD_AGENT_IMAGE:-gcr.io/datadoghq/agent:7}" >/dev/null 2>&1 \
+            || echo "datadog-ai-guard: agent image pre-pull deferred (will pull on first start)."
+          # Best-effort start now; if the runtime credential env is not yet present
+          # at setup time, start it from a shell later: sh ~/.datadog/start-agent.sh
+          if [ -n "$s" ] && [ -n "${DD_API_KEY:-}" ]; then
+            DD_APM_TRACING_ENABLED=true \
+            DD_SITE="${{ kit.args.site }}" \
+            HTTPS_PROXY="${HTTPS_PROXY:-http://gateway.docker.internal:3128}" \
+            sh "$s" || echo "datadog-ai-guard: agent start deferred — run 'sh ~/.datadog/start-agent.sh' from a shell."
+          else
+            echo "datadog-ai-guard: start the trace Agent from a shell -> sh ~/.datadog/start-agent.sh"
+          fi
+        fi
+      description: Start an in-sandbox Datadog Agent for the AI Guard trace UI (apm=true only)
 
 agentInstructions:
   content: |
@@ -118,14 +215,23 @@ agentInstructions:
 
     ## Already configured
 
-    - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are set to the sentinel
-      `proxy-managed`. Do **not** try to read or print them — the sbx proxy swaps
-      in the real values on outbound calls to the AI Guard endpoint (`app.$DD_SITE`
-      on base sites, the bare `$DD_SITE` on us3/us5/ap1). They never exist in the
-      container.
+    - **Credentials**: `DD_API_KEY` / `DD_APP_KEY` are a proxy-managed placeholder,
+      never the real value. Do **not** try to read or print them — the sbx proxy
+      swaps in the real values on outbound calls to the AI Guard endpoint
+      (`app.$DD_SITE` on base sites, the bare `$DD_SITE` on us3/us5/ap1). They never
+      exist in the container.
+    - **Proxy routing**: outbound HTTPS must go through the sbx proxy for the swap
+      to happen. Python is handled automatically (a `.pth` auto-imports the
+      `_sbx_proxy_tunnel` shim). **Node**: `import '~/.datadog/sbx_proxy_tunnel.mjs'`
+      **before** dd-trace makes any call, otherwise it bypasses the proxy and 401s.
     - **Environment**: `DD_AI_GUARD_ENABLED=true`, `DD_SITE`, `DD_ENV`,
       `DD_SERVICE` are exported. APM tracing and instrumentation telemetry are
       disabled by default (agentless mode, no local Datadog Agent).
+    - **Trace UI (optional)**: `evaluate()` always returns the verdict for inline
+      enforcement. To also see evaluations in the Datadog AI Guard UI, launch the
+      kit with `--kit-arg apm=true` — it runs an in-sandbox Datadog Agent that
+      forwards the evaluation spans through the proxy. Start/restart it from a
+      shell with `sh ~/.datadog/start-agent.sh`. Not needed for enforcement.
     - **Network**: egress is allowed to the AI Guard endpoint (`app.$DD_SITE` /
       `$DD_SITE`) plus the pip/npm registries.
 
@@ -147,9 +253,11 @@ agentInstructions:
     ## Node.js (dd-trace >= 5.69.0)
 
     dd-trace is installed globally. In your project either `npm install dd-trace`
-    (network is already allowed) or resolve the global copy, then:
+    (network is already allowed) or resolve the global copy. Import the proxy
+    helper first so dd-trace's HTTPS is routed through the injecting proxy:
 
     ```javascript
+    import '~/.datadog/sbx_proxy_tunnel.mjs';  // MUST be first; else 401
     import tracer from 'dd-trace';
 
     const result = await tracer.aiguard.evaluate(
