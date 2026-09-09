@@ -55,7 +55,7 @@ fi
 
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SANDBOX="ddaig-e2e-$$"
-WORKDIR="$HOME/.cache/sbx-kits-datadog-e2e-$$"   # under $HOME so org fs policy allows the mount
+WORKDIR="$HOME/work/sbx-kits-datadog-e2e-$$"   # under ~/work: org fs governance (allowwork) denies ~/.cache
 SBX=(sbx --app-name "$APP_NAME")
 
 pass=0 fail=0

@@ -9,7 +9,8 @@
 //     import '<path>/.datadog/sbx_proxy_tunnel.mjs';
 //
 // It installs a CONNECT-tunnelling https.globalAgent. No-op when no proxy is
-// configured; honors NO_PROXY; never throws on import.
+// configured; never throws on import. Honors NO_PROXY, including a bare "*"
+// (bypass every host) and "*.foo.com" wildcard suffixes.
 import http from 'node:http';
 import tls from 'node:tls';
 import https from 'node:https';
@@ -18,12 +19,20 @@ try {
   const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy;
   if (proxyUrl) {
     const proxy = new URL(proxyUrl);
-    const noProxy = (process.env.NO_PROXY || process.env.no_proxy || '')
+    const entries = (process.env.NO_PROXY || process.env.no_proxy || '')
       .split(',')
-      .map((s) => s.trim().replace(/^\./, '').toLowerCase())
+      .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
+    // A bare "*" disables proxying for every host (curl/requests/Go convention).
+    const bypassAll = entries.includes('*');
+    // Normalize the rest to bare domain suffixes so "*.foo.com", ".foo.com" and
+    // "foo.com" all match foo.com and any subdomain of it.
+    const noProxy = entries
+      .filter((s) => s !== '*')
+      .map((s) => s.replace(/^\*/, '').replace(/^\./, ''));
     const bypass = (host) => {
       host = (host || '').toLowerCase();
+      if (bypassAll) return true;
       return (
         host === proxy.hostname.toLowerCase() ||
         noProxy.some((s) => host === s || host.endsWith('.' + s))

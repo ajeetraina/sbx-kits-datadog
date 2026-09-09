@@ -5,8 +5,9 @@ Installed by the datadog-ai-guard sbx kit. Datadog's ddtrace AI Guard client
 and ignores HTTPS_PROXY, so the sbx credential-injecting proxy never sees the
 request and the DD-API-KEY placeholder reaches Datadog unswapped -> HTTP 401.
 
-This shim makes http.client.HTTPSConnection tunnel through HTTPS_PROXY (honoring
-NO_PROXY) so the proxy can swap the placeholder for the real key. It is a no-op
+This shim makes http.client.HTTPSConnection tunnel through HTTPS_PROXY so the
+proxy can swap the placeholder for the real key. It honors NO_PROXY, including a
+bare "*" (bypass every host) and "*.foo.com" wildcard suffixes. It is a no-op
 when no proxy is configured, and never raises on import.
 """
 import os
@@ -24,7 +25,12 @@ def _install():
         return
 
     no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
-    skip = {h.strip().lstrip(".").lower() for h in no_proxy.split(",") if h.strip()}
+    entries = [h.strip().lower() for h in no_proxy.split(",") if h.strip()]
+    # A bare "*" disables proxying for every host (curl/requests/Go convention).
+    bypass_all = "*" in entries
+    # Normalize the rest to bare domain suffixes so "*.foo.com", ".foo.com" and
+    # "foo.com" all match foo.com and any subdomain of it.
+    skip = {e.lstrip("*").lstrip(".") for e in entries if e != "*"}
 
     import http.client
 
@@ -34,6 +40,8 @@ def _install():
 
     def _bypass(host):
         host = (host or "").lower()
+        if bypass_all:
+            return True
         return host == proxy_host.lower() or any(
             host == s or host.endswith("." + s) for s in skip
         )
