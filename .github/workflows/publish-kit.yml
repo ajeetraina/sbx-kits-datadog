@@ -46,7 +46,15 @@ jobs:
 
       - name: Install sbx CLI
         run: |
-          brew install --cask docker/tap/sbx@rc
+          # Use the STABLE cask, not @rc. The release-candidate channel moves
+          # under us and has broken this job twice: v0.48-rc first required an
+          # `sbx login` session for `sbx kit validate`, then added a credential
+          # cross-check that rejects this v2 spec ("... all route host
+          # app.<site>; only datadogapp is injected there"). The v2 kit validates
+          # cleanly on stable sbx, which is the channel it was authored against.
+          # (The v3 kit publishes via `docker buildx` in the publish-v3 job and
+          # is unaffected by the sbx CLI version.)
+          brew install --cask docker/tap/sbx
           sbx version
 
       - name: Authenticate to Docker Hub
