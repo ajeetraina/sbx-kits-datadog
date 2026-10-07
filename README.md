@@ -52,11 +52,20 @@ kit-tck validate --layout /tmp/ddaig-layout 0.1.0
 
 # inspect the resolved v3 declarations
 sbx kit inspect v3/datadog-ai-guard
+```
 
-# publish (one OCI artifact; the recipe FROM builds the content, the frontend annotates it)
+The v3 kit publishes to its **own** Docker Hub repo — `ajeetraina777/datadog-ai-guard-kit-v3`
+— kept separate from the v2 repo (`…/datadog-ai-guard-kit`) so the two schemas
+never share a tag namespace. CI (`.github/workflows/publish-kit.yml`, job
+`publish-v3`) builds and pushes it on every push to `main` (→ `latest`) and on a
+`vX.Y.Z` tag (→ `X.Y.Z` + `latest`). To publish by hand (one OCI artifact; the
+recipe `FROM` builds the content, the frontend annotates it):
+
+```bash
 docker buildx build v3/datadog-ai-guard -f v3/datadog-ai-guard/datadog-ai-guard.yaml \
   --platform linux/amd64,linux/arm64 --push \
-  -t docker.io/ajeetraina777/datadog-ai-guard-kit:0.1.0-v3
+  -t docker.io/ajeetraina777/datadog-ai-guard-kit-v3:0.1.0 \
+  -t docker.io/ajeetraina777/datadog-ai-guard-kit-v3:latest
 ```
 
 ## What it does

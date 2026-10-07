@@ -34,7 +34,8 @@ concurrency:
 
 env:
   DOCKERHUB_USER: ajeetraina777
-  REPO: datadog-ai-guard-kit
+  REPO: datadog-ai-guard-kit        # v2 kit (sbx kit push, from the repo root)
+  REPO_V3: datadog-ai-guard-kit-v3  # v3 kit (docker buildx, from v3/datadog-ai-guard)
 
 jobs:
   publish:
@@ -93,3 +94,49 @@ jobs:
         run: |
           chmod +x scripts/update-dockerhub-readme.sh
           ./scripts/update-dockerhub-readme.sh docs/DOCKERHUB.md
+
+  # The v3 kit is a single OCI artifact built by `docker buildx` (the kit
+  # frontend is pulled from the descriptor's `# syntax=docker/sandbox-kit:3`
+  # line and annotates the image during the build). buildx needs a Docker
+  # daemon, so this job runs on Linux — unlike the v2 `publish` job, which runs
+  # on macOS only because sbx ships as a macOS cask and `sbx kit push` needs no
+  # daemon. Published to a SEPARATE repo ($REPO_V3) so v2 and v3 tags never
+  # collide; same triggers as v2 (push to main -> latest, tag vX.Y.Z -> X.Y.Z +
+  # latest, manual dispatch -> the chosen tag).
+  publish-v3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation for the multi-arch build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve tags
+        id: meta
+        run: |
+          repo="docker.io/${DOCKERHUB_USER}/${REPO_V3}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"                       # strip leading v from vX.Y.Z
+            echo "args=-t $repo:$v -t $repo:latest" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "args=-t $repo:${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=-t $repo:latest" >> "$GITHUB_OUTPUT"  # push to main
+          fi
+
+      - name: Build and push the v3 OCI artifact
+        run: |
+          docker buildx build v3/datadog-ai-guard \
+            -f v3/datadog-ai-guard/datadog-ai-guard.yaml \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=true \
+            --push ${{ steps.meta.outputs.args }}
