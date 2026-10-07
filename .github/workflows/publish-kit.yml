@@ -63,6 +63,12 @@ jobs:
           mkdir -p ~/.docker
           auth=$(printf '%s:%s' "$DH_USER" "$DH_TOKEN" | base64)
           printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}\n' "$auth" > ~/.docker/config.json
+          # sbx v0.48+ requires its OWN Docker session for `sbx kit validate` (it no
+          # longer falls back to ~/.docker/config.json for validate — only push does),
+          # failing with "not signed in to Docker / try: sbx login". Establish that
+          # session non-interactively from the same token. The sbx-login session also
+          # takes priority for push.
+          printf '%s' "$DH_TOKEN" | sbx login --username "$DH_USER" --password-stdin
 
       - name: Resolve tags
         id: meta
