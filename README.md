@@ -14,6 +14,51 @@ the container.
 This pairs the sandbox's isolation + egress control with AI Guard's inline
 LLM-interaction screening for defense in depth.
 
+## Schema versions (v2 and v3)
+
+This repo ships the kit in **both** Docker Sandboxes kit grammars, side by side,
+so nothing existing breaks:
+
+| | Grammar | Location | Consume with |
+|---|---|---|---|
+| **v2** | `schemaVersion: "2"` single `spec.yaml` + bundled `files/` | repo root | `sbx run claude --kit ./sbx-kits-datadog/` |
+| **v3** | `schemaVersion: "3"` typed-capability descriptor + overlay recipe | [`v3/datadog-ai-guard/`](v3/datadog-ai-guard/) | `sbx run <v3-workload> --kit ./sbx-kits-datadog/v3/datadog-ai-guard` |
+
+The two are independent: a **v3 mixin composes only onto a v3 workload kit**, and
+a v2 mixin composes only onto a v2 agent — so publishing both changes nothing for
+existing consumers. The v3 descriptor re-expresses the same behavior through
+`credential@1`, `network-policy@1`, `lifecycle@1` and `agent-context@1`; the
+shipped `files/` tree moves from `sbx kit push` bundling to a `scratch` overlay
+(`v3/datadog-ai-guard/datadog-ai-guard.dockerfile`).
+
+> **Heads-up for v3:** the stock `sbx run claude` / `sbx run shell` are
+> *template-based* agents, not v3 workload **kits**, so composing the v3 mixin
+> onto them currently fails with *"no workload kit in the set"*. The v3 mixin
+> needs a v3 workload kit as its base. Until a v3 workload is published, the **v2
+> kit at the repo root remains the path that composes onto the stock agents** —
+> which is exactly why v2 is kept.
+
+### Build / verify the v3 kit
+
+```bash
+# validate the descriptor (fails fast on a bad field)
+docker buildx build v3/datadog-ai-guard -f v3/datadog-ai-guard/datadog-ai-guard.yaml \
+  --output type=cacheonly
+
+# build to an OCI layout and conformance-check it
+docker buildx build v3/datadog-ai-guard -f v3/datadog-ai-guard/datadog-ai-guard.yaml \
+  -t datadog-ai-guard-kit:0.1.0 --output type=oci,dest=/tmp/ddaig-layout,tar=false
+kit-tck validate --layout /tmp/ddaig-layout 0.1.0
+
+# inspect the resolved v3 declarations
+sbx kit inspect v3/datadog-ai-guard
+
+# publish (one OCI artifact; the recipe FROM builds the content, the frontend annotates it)
+docker buildx build v3/datadog-ai-guard -f v3/datadog-ai-guard/datadog-ai-guard.yaml \
+  --platform linux/amd64,linux/arm64 --push \
+  -t docker.io/ajeetraina777/datadog-ai-guard-kit:0.1.0-v3
+```
+
 ## What it does
 
 - Installs `ddtrace>=3.19.0` (Python) and `dd-trace@^5.69.0` (Node, global).

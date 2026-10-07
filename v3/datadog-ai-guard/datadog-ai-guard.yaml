@@ -1,0 +1,356 @@
+# syntax=docker/sandbox-kit:3
+# Datadog AI Guard as a Docker Sandboxes MIXIN (schemaVersion 3).
+#
+# Migrated from the v2 spec.yaml. As a mixin it carries no ENTRYPOINT — the base
+# workload's launch command stays and you run your AI app / `claude` etc. from
+# the shell; the SDKs and the DD_* environment this kit adds are just there. The
+# v2 kit shipped a `files/` tree that `sbx kit push` bundled; v3 ships the same
+# files as a scratch overlay (see datadog-ai-guard.dockerfile), and the install
+# hooks below wire them into the composed base's Python/Node at create time.
+schemaVersion: "3"
+kind: mixin
+displayName: Datadog AI Guard
+author: "Ajeet Singh Raina"
+# `version:`/`sourceUrl:`/`licenses:` were all absent in v2. They name the
+# published artifact (org.opencontainers.image.{version,source,licenses}); a
+# missing one only shows up once the kit is in a registry, so set all three.
+version: "0.1.0"
+sourceUrl: https://github.com/ajeetraina/sbx-kits-datadog
+licenses:
+  - Apache-2.0
+description: >-
+  Installs the Datadog AI Guard SDKs (Python ddtrace + Node dd-trace) and wires
+  agentless credentials/env so AI apps and agents built inside the sandbox can
+  screen LLM prompts, tool calls, and outputs for prompt injection, jailbreaks,
+  tool misuse, and sensitive-data exfiltration via client.evaluate(...).
+  Datadog API/APP keys are proxy-injected and never enter the container.
+  Sets DD_* environment variables (last-wins if a later --kit overrides them).
+  Layer it onto any agent base (claude, codex, gemini, …); no agent affinity.
+
+# No `provides`. The kit installs ddtrace>=3.19.0 and dd-trace@^5.69.0 — floating
+# lower-bound ranges, not pins — so it cannot honestly assert a matchable
+# `<tool>@<version>`. In v3 an unversioned/ranged provide is refused at publish
+# (RequireVersionedProvides), and the honest answer when you don't know exactly
+# what resolved is to offer nothing matchable. The v2 kit declared no provides.
+
+# No `requires`. The v2 kit had no agent affinity and this stays base-agnostic.
+# The SDK install hooks DO use python3 / npm, but each guards on `command -v`
+# and degrades to a printed skip, so the dependency is conditional — and
+# `requires` is a hard, closed-set precondition on EVERY composition with no
+# either/or, so declaring deb/python3 or an npm name would make the kit refuse
+# to compose on bases it runs on fine. Target a base that carries the runtime
+# you intend to use.
+
+# Datadog site + tags are installer-tunable, resolved at sandbox CREATE. In v3,
+# create-phase args (no `buildArg:`) expand across the whole effective descriptor
+# — capability configs included — so `site` still parameterizes the credential
+# inject domains, the network allowlist, and the install/startup hook commands
+# below, and non-US sites (datadoghq.eu, us3/us5/ap1) work without editing
+# anything. Each arg's `env:` field additionally exports its resolved value into
+# the container under that name, which is how the v2 `environment.variables`
+# DD_SITE / DD_ENV / DD_SERVICE / DD_APM_TRACING_ENABLED get set (v3 moves static
+# env into the recipe's ENV and arg-driven env onto the arg's `env:` field).
+#
+# The AI Guard SDK derives its endpoint host from the site: app.<site> for the
+# base sites (datadoghq.com, datadoghq.eu) and the bare <site> for regional sites
+# (us3/us5/ap1.datadoghq.com) — never api.<site>. The credential inject +
+# allowlist below cover both shapes.
+args:
+  site:
+    default: "datadoghq.com"
+    description: "Datadog site (DD_SITE): datadoghq.com | datadoghq.eu | us3.datadoghq.com | us5.datadoghq.com | ap1.datadoghq.com"
+    pattern: '^[a-z0-9.-]+\.[a-z]{2,}$'
+    env: DD_SITE
+  env:
+    default: "sandbox"
+    description: "Value for DD_ENV (deployment environment tag)."
+    pattern: '^[A-Za-z0-9._:/-]+$'
+    env: DD_ENV
+  service:
+    default: "sbx-ai-guard"
+    description: "Value for DD_SERVICE (service name tag)."
+    pattern: '^[A-Za-z0-9._:/-]+$'
+    env: DD_SERVICE
+  apm:
+    default: "false"
+    description: >-
+      Send AI Guard evaluations as APM traces so they appear in the Datadog UI
+      ("AI Guard / Submit your first trace"). "true" runs a Datadog Agent
+      container in the sandbox (trace intake on 127.0.0.1:8126) that forwards
+      through the credential-injecting proxy. Default "false" keeps the kit fully
+      agentless — evaluate() still returns live verdicts for inline enforcement,
+      they just won't show in the trace UI.
+    pattern: '^(true|false)$'
+    # Exported as DD_APM_TRACING_ENABLED (read by ddtrace/dd-trace and by
+    # start-agent.sh) AND referenced as ${{ kit.args.apm }} in the startup hook
+    # below — one arg, both uses.
+    env: DD_APM_TRACING_ENABLED
+
+capabilities:
+  # Two distinct secrets => two credential entries, both proxy-managed: the
+  # container only ever sees DD_API_KEY / DD_APP_KEY == "proxy-managed", and the
+  # proxy substitutes the real values into the DD-API-KEY / DD-APPLICATION-KEY
+  # request headers on outbound calls. phase: runtime — the keys are used by the
+  # SDK's evaluate() and by the in-sandbox Agent in steady state, not by install
+  # hooks. v2 marked both `required: true`; v3 entries are required by default,
+  # so we simply omit `optional` to keep that. Service names stay hyphen-free
+  # (datadogapi / datadogapp) so sbx derives a valid SBX_CRED_<SERVICE>_MODE var.
+  #
+  # The SDK's endpoint host depends on the site (app.<site> for base sites; the
+  # bare <site> for us3/us5/ap1), so each key injects on BOTH candidate hosts —
+  # whichever the SDK actually calls gets the swap, the other rule is unused.
+  # Injection is keyed by (domain, header), so the two keys never cross even
+  # though they share a sentinel and their domains. Every inject domain MUST
+  # appear in the SAME phase's (runtime) network allow list below — the v3
+  # cross-check is an EXACT host match, so the single-label `*.<site>` wildcard
+  # does NOT satisfy api.<site>: it is listed literally in runtime.allow (which
+  # widens nothing it did not already cover at run time).
+  - type: com.docker.sandbox/credential@1
+    description: "Datadog API key (sent as the DD-API-KEY header)."
+    config:
+      service: datadogapi
+      phase: runtime
+      apiKey:
+        name: DD_API_KEY
+        proxyManaged: true
+        inject:
+          - domain: "app.${{ kit.args.site }}"
+            header: DD-API-KEY
+            format: "%s"
+          - domain: "${{ kit.args.site }}"
+            header: DD-API-KEY
+            format: "%s"
+          # apm=true only: the in-sandbox Datadog Agent forwards APM traces to the
+          # trace intake with a DD-Api-Key header, and validates the key against
+          # api.<site> with DD-API-KEY. Inject on both so the Agent's egress gets
+          # the real key swapped in (unused when apm=false).
+          - domain: "trace.agent.${{ kit.args.site }}"
+            header: DD-Api-Key
+            format: "%s"
+          - domain: "api.${{ kit.args.site }}"
+            header: DD-API-KEY
+            format: "%s"
+  - type: com.docker.sandbox/credential@1
+    description: "Datadog application key (sent as the DD-APPLICATION-KEY header)."
+    config:
+      service: datadogapp
+      phase: runtime
+      apiKey:
+        name: DD_APP_KEY
+        proxyManaged: true
+        inject:
+          - domain: "app.${{ kit.args.site }}"
+            header: DD-APPLICATION-KEY
+            format: "%s"
+          - domain: "${{ kit.args.site }}"
+            header: DD-APPLICATION-KEY
+            format: "%s"
+
+  # v2 had one flat egress list; v3 is phase-scoped. An absent phase grants
+  # nothing, and the union of install+runtime must lose no host from the v2 list.
+  #   install  — only the SDK installs (pip, npm) reach the network.
+  #   runtime  — the agent/SDK evaluate() calls, the user's own pip/npm installs
+  #              in their project (the context file promises these are allowed),
+  #              and the apm=true Agent (pulled + run at boot = runtime phase).
+  # MIGRATION NOTE: api.<site> is added literally. v2 covered it via the
+  # single-label `*.<site>` wildcard, but the credential inject cross-check needs
+  # an exact host match, so the literal is required; it widens nothing `*.<site>`
+  # did not already allow at run time.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      install:
+        allow:
+          # pip metadata + wheel content hosts (ddtrace install).
+          - "pypi.org"
+          - "files.pythonhosted.org"
+          # npm registry (dd-trace install).
+          - "registry.npmjs.org"
+      runtime:
+        allow:
+          # AI Guard evaluation intake (agentless). The SDK targets app.<site> on
+          # the base sites and the bare <site> on regional sites. Both are
+          # credential inject domains.
+          - "app.${{ kit.args.site }}"
+          - "${{ kit.args.site }}"
+          # Sibling hosts on the same site. NOTE: "*." matches a SINGLE label, so
+          # it covers app./api.<site> but NOT the two-label trace.agent.<site>.
+          - "*.${{ kit.args.site }}"
+          # apm=true: the in-sandbox Agent posts APM traces here. Two labels
+          # (trace.agent), so *.<site> above does NOT cover it. Also a credential
+          # inject domain. (Under org-managed governance the org's own policy is
+          # authoritative for <site> and must include this host; a kit/local allow
+          # can't override it.)
+          - "trace.agent.${{ kit.args.site }}"
+          # Credential inject domain (Agent key validation). Listed literally for
+          # the exact-match inject cross-check — see MIGRATION NOTE above.
+          - "api.${{ kit.args.site }}"
+          # The context file tells the agent `pip install` / `npm install` work in
+          # its own project at runtime, so keep the package hosts open here too.
+          - "pypi.org"
+          - "files.pythonhosted.org"
+          - "registry.npmjs.org"
+          # apm=true only: pull the Datadog Agent image (datadog/agent:7) from
+          # Docker Hub at boot. Unused when apm=false.
+          - "registry-1.docker.io"
+          - "auth.docker.io"
+          - "production.cloudflare.docker.com"
+
+  # Hook environments are DENY-BY-DEFAULT in v3: a hook sees only the platform
+  # baseline (PATH, HOME, HOSTNAME, TERM, PWD, OLDPWD, SHLVL, _) plus the names it
+  # declares in `env:`. v2's hook environment was unrestricted, so pip/npm/docker
+  # saw the sandbox's forced-proxy and CA variables silently; here they are
+  # declared explicitly so the installs still reach the allowlisted hosts.
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: "command -v python3 >/dev/null 2>&1 && (python3 -c 'import ddtrace' 2>/dev/null || python3 -m pip install --break-system-packages 'ddtrace>=3.19.0' || python3 -m pip install 'ddtrace>=3.19.0') || echo 'datadog-ai-guard: python3 not found, skipping ddtrace'"
+          # pip fetches through the sandbox's forced proxy and must trust its MITM
+          # CA; those variables are not in the baseline, so declare them.
+          env:
+            - HTTP_PROXY
+            - HTTPS_PROXY
+            - NO_PROXY
+            - http_proxy
+            - https_proxy
+            - no_proxy
+            - SSL_CERT_FILE
+            - SSL_CERT_DIR
+            - CURL_CA_BUNDLE
+            - REQUESTS_CA_BUNDLE
+            - PIP_CERT
+          description: Install the Datadog Python SDK (ddtrace) for AI Guard
+        # ddtrace's AI Guard client (ddtrace.internal.utils.http.get_connection) opens a
+        # *direct* HTTPSConnection and ignores HTTPS_PROXY, so the sbx credential-injecting
+        # forward proxy never sees the request and the DD-API-KEY placeholder reaches Datadog
+        # unswapped -> HTTP 401. Install a stdlib shim (shipped by the overlay at
+        # ~/.datadog/_sbx_proxy_tunnel.py) into site-packages via a .pth auto-import so
+        # http.client.HTTPSConnection tunnels through HTTPS_PROXY. No-op when no proxy is
+        # set; honors NO_PROXY. Pure file copy against the composed base's Python layout —
+        # needs no network and no create-time value, so it stays a hook (and sees only the
+        # baseline).
+        - command: |
+            command -v python3 >/dev/null 2>&1 && python3 -c '
+            import glob, os, sysconfig, site, shutil
+            cands = glob.glob("/home/*/.datadog/_sbx_proxy_tunnel.py") + ["/root/.datadog/_sbx_proxy_tunnel.py"]
+            src = next((c for c in cands if os.path.isfile(c)), None)
+            if not src:
+                print("datadog-ai-guard: proxy shim source not found; SDK calls may 401"); raise SystemExit(0)
+            dirs = set()
+            try:
+                dirs.update(p for p in site.getsitepackages() if p)
+            except Exception:
+                pass
+            for k in ("purelib", "platlib"):
+                p = sysconfig.get_paths().get(k)
+                if p:
+                    dirs.add(p)
+            done = []
+            for d in dirs:
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    shutil.copyfile(src, os.path.join(d, "_sbx_proxy_tunnel.py"))
+                    with open(os.path.join(d, "aaa_sbx_proxy_tunnel.pth"), "w") as f:
+                        f.write("import _sbx_proxy_tunnel\n")
+                    done.append(d)
+                except Exception:
+                    pass
+            print("datadog-ai-guard: proxy tunnel shim installed ->", done or "(no writable site dir)")
+            ' || echo "datadog-ai-guard: python3 not found, skipping proxy shim"
+          description: Route Python stdlib HTTPS through the sbx proxy so the AI Guard SDK works
+        - command: "command -v npm >/dev/null 2>&1 && (npm ls -g dd-trace >/dev/null 2>&1 || npm install -g 'dd-trace@^5.69.0') || echo 'datadog-ai-guard: npm not found, skipping dd-trace'"
+          # MIGRATION NOTE: pinned to user: agent. v2 install hooks defaulted to the
+          # agent user; v3 install hooks default to root. npm's global prefix is
+          # per-user — the agent resolves ~/.npmrc's prefix (/usr/local/share/npm-global,
+          # which the agent owns), while root's prefix is /usr/local. Installing -g as
+          # root lands dd-trace in /usr/local/lib/node_modules, where the agent's
+          # `npm ls -g` can't see it and node can't resolve it (NODE_PATH is empty).
+          # Running as agent restores the v2 behavior: the global install lands in the
+          # agent's own prefix. (The pip/ddtrace and proxy-shim hooks above stay root:
+          # they target system-wide dirs that every user reads, so root is correct and
+          # the agent sees the result — only npm's prefix is user-scoped.)
+          user: agent
+          # npm fetches through the forced proxy and reads its CA from
+          # NODE_EXTRA_CA_CERTS / SSL_CERT_FILE.
+          env:
+            - HTTP_PROXY
+            - HTTPS_PROXY
+            - NO_PROXY
+            - http_proxy
+            - https_proxy
+            - no_proxy
+            - SSL_CERT_FILE
+            - SSL_CERT_DIR
+            - CURL_CA_BUNDLE
+            - NODE_EXTRA_CA_CERTS
+            # MIGRATION NOTE: NPM_CONFIG_PREFIX is what sets the agent's global npm
+            # prefix (/usr/local/share/npm-global, agent-owned) — it is NOT in a
+            # committed .npmrc, it comes from the base's environment. v3 hook envs
+            # are deny-by-default, so without declaring it npm falls back to its
+            # compiled-in /usr/local prefix and `npm install -g` fails EACCES (the
+            # agent can't mkdir /usr/local/lib/node_modules). Declaring it restores
+            # the agent-prefix install that `npm ls -g dd-trace` then resolves.
+            - NPM_CONFIG_PREFIX
+          description: Install the Datadog Node SDK (dd-trace) for AI Guard
+      startup:
+        # apm=true only: run an in-sandbox Datadog Agent so AI Guard evaluations
+        # reach the trace UI. The Agent forwards through the sbx proxy (real key
+        # swapped in; never enters the sandbox).
+        #
+        # MIGRATION NOTE: v2 ran this from an INSTALL hook, but a v3 runtime
+        # credential (DD_API_KEY, phase: runtime) does not exist during the
+        # install phase — it is injected only at runtime — so an install-time
+        # start could never see the key and always fell through to "start it from
+        # a shell later". Modeled here as a STARTUP hook instead: it runs every
+        # boot in the runtime phase, where DD_API_KEY, DD_SITE and HTTPS_PROXY are
+        # present, so apm=true actually starts the Agent automatically. It is
+        # idempotent — start-agent.sh no-ops unless DD_APM_TRACING_ENABLED=true and
+        # skips when the container is already running — as startup hooks must be.
+        # v2 also pre-pulled gcr.io/datadoghq/agent:7 at install, but that host was
+        # never in the allowlist (start-agent.sh pulls datadog/agent:7 from Docker
+        # Hub, which IS allowed), so the pre-pull was dead config and is dropped;
+        # the image is pulled on first start.
+        - command: |
+            if [ "${{ kit.args.apm }}" != "true" ]; then
+              echo "datadog-ai-guard: apm=false (agentless) — skipping Datadog Agent; evaluate() still returns live verdicts."
+            elif ! command -v docker >/dev/null 2>&1; then
+              echo "datadog-ai-guard: apm=true but docker is unavailable — cannot run the trace Agent."
+            else
+              s="$(ls /home/*/.datadog/start-agent.sh /root/.datadog/start-agent.sh 2>/dev/null | head -1)"
+              if [ -n "$s" ]; then
+                sh "$s" || echo "datadog-ai-guard: agent start deferred — run 'sh ~/.datadog/start-agent.sh' from a shell."
+              else
+                echo "datadog-ai-guard: start-agent.sh not found; cannot start the trace Agent."
+              fi
+            fi
+          user: agent
+          background: false
+          # start-agent.sh (and the `docker run` it drives) read the runtime
+          # credential placeholder, the site, the forced proxy + CA, the docker
+          # socket, and the optional Agent overrides. All deny-by-default.
+          env:
+            - DD_APM_TRACING_ENABLED
+            - DD_SITE
+            - DD_API_KEY
+            - HTTP_PROXY
+            - HTTPS_PROXY
+            - NO_PROXY
+            - http_proxy
+            - https_proxy
+            - no_proxy
+            - DOCKER_HOST
+            - SSL_CERT_FILE
+            - SSL_CERT_DIR
+            - CURL_CA_BUNDLE
+            - DD_AGENT_IMAGE
+            - DD_AGENT_CONTAINER
+            - DD_HOSTNAME
+            - DD_AGENT_LOG_LEVEL
+          description: Start an in-sandbox Datadog Agent for the AI Guard trace UI (apm=true only)
+
+  # v2 agentInstructions.content -> staged context file. A mixin contributes
+  # context but owns no profile, so `contentFile` only (no `filename:`, which is
+  # workload-only). The body uses shell-style $DD_SITE, not ${{ kit.args.* }}, so
+  # staging it byte-for-byte is correct.
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      contentFile: ./datadog-ai-guard-context.md
