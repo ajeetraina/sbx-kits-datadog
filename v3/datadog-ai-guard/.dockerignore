@@ -1,0 +1,5 @@
+# The v3 overlay recipe (datadog-ai-guard.dockerfile) only needs files/.
+# Exclude everything else so the kit build context stays small (no .git, docs,
+# scripts, READMEs, or the descriptors themselves).
+*
+!files
