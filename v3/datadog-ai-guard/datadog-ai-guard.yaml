@@ -87,64 +87,35 @@ args:
     env: DD_APM_TRACING_ENABLED
 
 capabilities:
-  # Two distinct secrets => two credential entries, both proxy-managed: the
-  # container only ever sees DD_API_KEY / DD_APP_KEY == "proxy-managed", and the
-  # proxy substitutes the real values into the DD-API-KEY / DD-APPLICATION-KEY
-  # request headers on outbound calls. phase: runtime — the keys are used by the
-  # SDK's evaluate() and by the in-sandbox Agent in steady state, not by install
-  # hooks. v2 marked both `required: true`; v3 entries are required by default,
-  # so we simply omit `optional` to keep that. Service names stay hyphen-free
-  # (datadogapi / datadogapp) so sbx derives a valid SBX_CRED_<SERVICE>_MODE var.
+  # CREDENTIALS ARE SUPPLIED BY THE USER AS CUSTOM SECRETS, NOT BY A credential@1
+  # CAPABILITY. This is a deliberate reversal of the first v3 cut, which declared
+  # two `credential@1` entries with `proxyManaged: true` + `service: datadogapi`/
+  # `datadogapp`. Per the credential@1 spec, a proxyManaged credential resolves
+  # its real value "from the host-side store keyed by `service`" — but sbx has no
+  # way to BIND a secret under those service names: `sbx secret set` accepts only
+  # a fixed built-in service list (Datadog is not on it), and `sbx secret
+  # set-custom` is keyed by (env, host), not by service. So the capability could
+  # never be satisfied — it only ever stamped the sentinel `DD_API_KEY=DD_APP_KEY=
+  # "proxy-managed"` into the env, which Datadog then received verbatim -> 401 on
+  # evaluate() and 403 on the apm=true trace intake. (Proven 2026-11-19: a host
+  # call with the real keys returned DENY, while the same call in-sandbox 401'd
+  # with `proxy-managed` in the env.)
   #
-  # The SDK's endpoint host depends on the site (app.<site> for base sites; the
-  # bare <site> for us3/us5/ap1), so each key injects on BOTH candidate hosts —
-  # whichever the SDK actually calls gets the swap, the other rule is unused.
-  # Injection is keyed by (domain, header), so the two keys never cross even
-  # though they share a sentinel and their domains. Every inject domain MUST
-  # appear in the SAME phase's (runtime) network allow list below — the v3
-  # cross-check is an EXACT host match, so the single-label `*.<site>` wildcard
-  # does NOT satisfy api.<site>: it is listed literally in runtime.allow (which
-  # widens nothing it did not already cover at run time).
-  - type: com.docker.sandbox/credential@1
-    description: "Datadog API key (sent as the DD-API-KEY header)."
-    config:
-      service: datadogapi
-      phase: runtime
-      apiKey:
-        name: DD_API_KEY
-        proxyManaged: true
-        inject:
-          - domain: "app.${{ kit.args.site }}"
-            header: DD-API-KEY
-            format: "%s"
-          - domain: "${{ kit.args.site }}"
-            header: DD-API-KEY
-            format: "%s"
-          # apm=true only: the in-sandbox Datadog Agent forwards APM traces to the
-          # trace intake with a DD-Api-Key header, and validates the key against
-          # api.<site> with DD-API-KEY. Inject on both so the Agent's egress gets
-          # the real key swapped in (unused when apm=false).
-          - domain: "trace.agent.${{ kit.args.site }}"
-            header: DD-Api-Key
-            format: "%s"
-          - domain: "api.${{ kit.args.site }}"
-            header: DD-API-KEY
-            format: "%s"
-  - type: com.docker.sandbox/credential@1
-    description: "Datadog application key (sent as the DD-APPLICATION-KEY header)."
-    config:
-      service: datadogapp
-      phase: runtime
-      apiKey:
-        name: DD_APP_KEY
-        proxyManaged: true
-        inject:
-          - domain: "app.${{ kit.args.site }}"
-            header: DD-APPLICATION-KEY
-            format: "%s"
-          - domain: "${{ kit.args.site }}"
-            header: DD-APPLICATION-KEY
-            format: "%s"
+  # The mechanism that actually works — and what v2 relied on — is a custom
+  # secret: it sets DD_API_KEY/DD_APP_KEY to an `sbx-cs-…` placeholder and the
+  # proxy value-swaps that placeholder for the real key in ANY outbound header to
+  # the bound host. With no credential@1 stamping the sentinel, that placeholder
+  # survives in the env and the swap fires. The user binds, once per daemon:
+  #
+  #   # evaluate() path (agentless): app.<site> is enough
+  #   sbx secret set-custom --host 'app.datadoghq.com' --env DD_API_KEY --value <api-key>
+  #   sbx secret set-custom --host 'app.datadoghq.com' --env DD_APP_KEY --value <app-key>
+  #   # apm=true trace UI also needs trace.agent.<site> + api.<site>; one wildcard
+  #   # entry covers all three (remove the single-host entries first):
+  #   sbx secret set-custom --host '**.datadoghq.com' --env DD_API_KEY --value <api-key>
+  #
+  # The hosts these headers go to are all in runtime.allow below (app.<site>,
+  # <site>, *.<site>, and the literal trace.agent.<site> for the two-label case).
 
   # v2 had one flat egress list; v3 is phase-scoped. An absent phase grants
   # nothing, and the union of install+runtime must lose no host from the v2 list.
@@ -236,6 +207,22 @@ capabilities:
             if not src:
                 print("datadog-ai-guard: proxy shim source not found; SDK calls may 401"); raise SystemExit(0)
             dirs = set()
+            # user: agent (below) runs this hook AS the agent, so the agent-
+            # writable user site (site.getusersitepackages() ->
+            # /home/agent/.local/lib/pythonX.Y/site-packages) is where the agent
+            # python3 looks AND the only dir it can write, so target it FIRST. The
+            # original hook ran as root and wrote only the SYSTEM site dirs
+            # (getsitepackages/purelib/platlib) which the agent python3 did not
+            # import from (ModuleNotFoundError), so evaluate kept returning 401.
+            # System dirs are still attempted below but no-op into the except when
+            # not writable. (Keep this block apostrophe-free: the whole hook is a
+            # python3 -c SINGLE-QUOTED string and a stray quote breaks it.)
+            try:
+                u = site.getusersitepackages()
+                if u:
+                    dirs.add(u)
+            except Exception:
+                pass
             try:
                 dirs.update(p for p in site.getsitepackages() if p)
             except Exception:
@@ -256,6 +243,13 @@ capabilities:
                     pass
             print("datadog-ai-guard: proxy tunnel shim installed ->", done or "(no writable site dir)")
             ' || echo "datadog-ai-guard: python3 not found, skipping proxy shim"
+          # MIGRATION NOTE: pinned to user: agent (was root, the v3 install-hook
+          # default). The shim must land in the AGENT's python user-site so the
+          # agent's python3 auto-imports it; a root-run hook writes root-owned
+          # system dirs the agent did not import from -> evaluate() 401'd. Same
+          # user-scoping reason as the npm hook below. Agent owns the overlay
+          # source (/home/agent/.datadog) and its own ~/.local, so no extra env.
+          user: agent
           description: Route Python stdlib HTTPS through the sbx proxy so the AI Guard SDK works
         - command: "command -v npm >/dev/null 2>&1 && (npm ls -g dd-trace >/dev/null 2>&1 || npm install -g 'dd-trace@^5.69.0') || echo 'datadog-ai-guard: npm not found, skipping dd-trace'"
           # MIGRATION NOTE: pinned to user: agent. v2 install hooks defaulted to the
